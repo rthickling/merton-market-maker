@@ -1,0 +1,7 @@
+# Used by clangd when no compile_commands.json is found in a parent directory of
+# the source file (typical on host; the Docker/reflection toolchain lives under /opt).
+-std=c++20
+-Iinclude
+# Clang may pick a GCC version whose libstdc++ paths do not exist; pin the install dir.
+# Change `13` if your `g++ -v` shows a different version under /usr/lib/gcc/x86_64-linux-gnu/.
+--gcc-install-dir=/usr/lib/gcc/x86_64-linux-gnu/13

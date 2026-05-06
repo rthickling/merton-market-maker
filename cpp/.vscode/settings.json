@@ -1,8 +1,4 @@
 {
-  "terminal.integrated.env.linux": {
-    "PYENV_VERSION": "merton-market-maker"
-  },
-  "C_Cpp.errorSquiggles": "disabled",
   "clangd.path": "/opt/clang-p2996/bin/clangd",
   "clangd.arguments": [
     "--query-driver=/usr/bin/g++,/usr/bin/c++,/usr/bin/clang++,/opt/clang-p2996/bin/clang++"

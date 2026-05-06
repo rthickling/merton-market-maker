@@ -1,6 +1,6 @@
 #pragma once
 
-#include "reflection_accessors.hpp"
+#include "reflection_accessors.hpp"  // IWYU pragma: keep
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 #include <string>

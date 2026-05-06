@@ -1,0 +1,28 @@
+# Reflection sources need the same compile line as cpp/toolchain-p2996.cmake.
+# Use clangd from that install (see .vscode/settings.json: clangd.path), not the
+# host LLVM clangd — otherwise <meta>, splices, and expansion statements won't parse.
+#
+# Paths match the Docker/dev image layout; override with a user .clangd fragment if needed.
+# python_module_entry_*.cpp also needs nanobind/pybind + Python dev headers; those appear
+# automatically in compile_commands.json from CMake, or add -isystem paths in a local .clangd.
+
+If:
+  PathMatch: .*/(include/reflection_.*\.hpp|src/python_module_entry_.*\.cpp)$
+CompileFlags:
+  Remove: [--gcc-install-dir=.*]
+  Add:
+    - -std=c++2c
+    - -freflection
+    - -freflection-latest
+    - -fexpansion-statements
+    - -stdlib=libc++
+    - -nostdinc++
+    - -fvisibility=hidden
+    - -D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION
+    - -DQL_USE_STD_SHARED_PTR
+    - -isystem
+    - /opt/clang-p2996/include/c++/v1
+    - -isystem
+    - /opt/clang-p2996/include/x86_64-unknown-linux-gnu/c++/v1
+    - -isystem
+    - /opt/ql_install/include

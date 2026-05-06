@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(merton_core LANGUAGES CXX)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # Do not force a C++ standard here.
 # The reflection toolchain flags provide the required language mode (e.g. -std=c++2c).
 

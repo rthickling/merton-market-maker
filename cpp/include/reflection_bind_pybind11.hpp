@@ -9,7 +9,7 @@ namespace py = pybind11;
 
 template <typename T>
 void stringify_members(const T& self, std::string& s) {
-    constexpr auto members = std::define_static_array(
+    static constexpr auto members = std::define_static_array(
         std::meta::nonstatic_data_members_of(^^T, std::meta::access_context::current()));
 
     bool first = true;
@@ -27,7 +27,7 @@ void stringify_members(const T& self, std::string& s) {
 
 template <typename T>
 void bind_reflected_struct(py::class_<T>& cl) {
-    constexpr auto members = std::define_static_array(
+    static constexpr auto members = std::define_static_array(
         std::meta::nonstatic_data_members_of(^^T, std::meta::access_context::current()));
 
     template for (constexpr auto m : members) {
@@ -45,7 +45,7 @@ void bind_reflected_struct(py::class_<T>& cl) {
 
 template <typename T>
 void bind_reflected_member_functions(py::class_<T>& cl) {
-    constexpr auto members = std::define_static_array(
+    static constexpr auto members = std::define_static_array(
         std::meta::members_of(^^T, std::meta::access_context::current()));
 
     template for (constexpr auto m : members) {

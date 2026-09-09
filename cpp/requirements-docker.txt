@@ -1,0 +1,5 @@
+# Pinned Python packages for Docker build/test images (Python 3.9).
+# Used by cpp/Dockerfile and cpp/Dockerfile.gcc.
+pybind11==3.0.2
+nanobind==2.12.0
+pytest==8.4.2

@@ -144,3 +144,26 @@ Requirements:
 - Docker
 
 Everything else will be pulled into the container.
+
+
+## Compiler toolchains
+
+Select with `COMPILER` (default remains `clang` until GCC is promoted):
+
+- `clang` — Bloomberg Clang P2996 + libc++ image `merton-refl-build` (`Dockerfile`, `toolchain-p2996.cmake`)
+- `gcc` — released GCC 16.2 + libstdc++ image `merton-gcc-16` (`Dockerfile.gcc`, `toolchain-gcc-16.cmake`)
+
+Each compiler/binding combo uses a separate build directory:
+
+`build/<clang-p2996|gcc-16>-<nanobind|pybind11>/`
+
+```bash
+cd cpp
+just test                                 # clang + default binding
+COMPILER=gcc just probe                   # reflection probe gate
+COMPILER=gcc MERTON_PYTHON_BINDING=pybind11 just test
+just test-matrix                          # all four combinations
+just copy-module                          # explicit deploy copy only
+```
+
+GCC 16.2 enables reflection with `-freflection` (there is no `-fexpansion-statements` flag on this release). Expansion statements are covered under `-freflection`.

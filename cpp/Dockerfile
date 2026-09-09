@@ -45,8 +45,10 @@ ARG CLANG_P2996_BRANCH=p2996
 		libedit2 libboost-all-dev && \
 		rm -rf /var/lib/apt/lists/*
 
-RUN python3 -m pip install --no-cache-dir pybind11 nanobind pytest && \
-	python${PYTHON_VERSION} -m pip install --no-cache-dir pybind11 nanobind pytest
+COPY requirements-docker.txt /tmp/requirements-docker.txt
+RUN python3 -m pip install --no-cache-dir -r /tmp/requirements-docker.txt && \
+	python${PYTHON_VERSION} -m pip install --no-cache-dir -r /tmp/requirements-docker.txt && \
+	rm -f /tmp/requirements-docker.txt
 
 	# Install just (recipe runner for justfile)
 	RUN curl -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin

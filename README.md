@@ -81,7 +81,7 @@ cd cpp
 just test
 ```
 
-This builds and tests the default GCC/nanobind combination. Run `just test-matrix` for GCC and Clang with both binding backends. See [BUILD](cpp/BUILD.md) for compiler selection, output paths, clean builds, and explicit deployment copying.
+This builds and tests the default GCC/nanobind combination. Run `just test-matrix` for GCC and Clang with both binding backends. See [BUILD](cpp/BUILD.md) for compiler selection, output paths, clean image rebuilds, and explicit deployment copying.
 
 ## References & Further Reading
 * Blog Post: [Stop Choosing: Get C++ Performance in Python Algos with C++26](https://profitview.net/blog/cpp26-reflection-python-algo-trading)

@@ -19,9 +19,17 @@ just test
 
 This builds the default GCC 16.2/nanobind environment, compiles `merton_online_calibrator.so`, imports it, and runs `cpp/tests/`. All compiler, Python, QuantLib, binding, and test dependencies are installed inside the pinned Docker image.
 
-To clean-build and test every supported compiler/binding combination:
+To test every supported compiler/binding combination (reuses Docker image layers if present):
 
 ```bash
+just test-matrix
+```
+
+For a cache-free image rebuild matching CI, clean-build each compiler first:
+
+```bash
+COMPILER=gcc just docker-build-clean
+COMPILER=clang just docker-build-clean
 just test-matrix
 ```
 
@@ -57,9 +65,9 @@ just show-defaults          # show compiler, binding, image and output selection
 just versions               # validate and print pinned versions from the image
 just probe                  # compile and run the reflection feature probe
 just docker-build-clean     # rebuild the selected image with --pull --no-cache
-just test                   # build and test the selected combination
-just test-compiler-matrix   # test both bindings with the selected compiler
-just test-matrix            # test all four compiler/binding combinations
+just test                   # build and test the selected combination (may reuse image cache)
+just test-compiler-matrix   # test both bindings with the selected compiler (may reuse image cache)
+just test-matrix            # test all four compiler/binding combinations (may reuse image cache)
 ```
 
 Build and test commands do not copy modules to deployment locations.
@@ -102,4 +110,4 @@ The Dockerfiles pin:
 
 ## CI
 
-`.github/workflows/cpp-toolchain-matrix.yml` clean-builds each compiler image without Docker cache, runs the reflection probe, then builds, imports, and tests both binding backends. This covers all four combinations.
+`.github/workflows/cpp-toolchain-matrix.yml` runs `just docker-build-clean` for each compiler (so images build with `--pull --no-cache`), then the reflection probe and both binding backends. Local `just test-matrix` alone does not disable Docker caching.

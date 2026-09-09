@@ -17,7 +17,7 @@ cd merton-market-maker/cpp
 just test
 ```
 
-This builds the default Bloomberg Clang P2996/nanobind environment, compiles `merton_online_calibrator.so`, imports it, and runs `cpp/tests/`. All compiler, Python, QuantLib, binding, and test dependencies are installed inside the pinned Docker image.
+This builds the default GCC 16.2/nanobind environment, compiles `merton_online_calibrator.so`, imports it, and runs `cpp/tests/`. All compiler, Python, QuantLib, binding, and test dependencies are installed inside the pinned Docker image.
 
 To clean-build and test every supported compiler/binding combination:
 
@@ -29,8 +29,8 @@ just test-matrix
 
 Supported compilers:
 
-- `COMPILER=clang`: pinned Bloomberg Clang P2996 with libc++ (default)
-- `COMPILER=gcc`: released GCC 16.2 with libstdc++
+- `COMPILER=gcc`: released GCC 16.2 with libstdc++ (default)
+- `COMPILER=clang`: pinned Bloomberg Clang P2996 with libc++
 
 Supported bindings:
 
@@ -40,9 +40,10 @@ Supported bindings:
 Examples:
 
 ```bash
-COMPILER=gcc just test
-COMPILER=gcc MERTON_PYTHON_BINDING=pybind11 just test
+just test
+COMPILER=clang just test
 COMPILER=clang MERTON_PYTHON_BINDING=pybind11 just test
+COMPILER=gcc MERTON_PYTHON_BINDING=pybind11 just test
 ```
 
 Command-line environment values override saved values in `.merton-build.env`. Run `just setup-defaults` for interactive local defaults or copy `.merton-build.env.example`.

@@ -6,7 +6,7 @@ root := justfile_directory()
 default:
   @just test
 
-# Shared env resolution used by recipes (COMPILER=clang|gcc; default clang until GCC verified).
+# Shared env resolution used by recipes (COMPILER=clang|gcc; default gcc).
 # Effective build dir: build/<compiler_tag>-<binding>
 
 setup-defaults:
@@ -29,12 +29,12 @@ setup-defaults:
   echo
 
   echo "1) Compiler toolchain (COMPILER)"
-  echo "   - clang: Bloomberg Clang P2996 + libc++ (current default)"
-  echo "   - gcc: released GCC 16.2 + libstdc++"
+  echo "   - gcc: released GCC 16.2 + libstdc++ (current default)"
+  echo "   - clang: Bloomberg Clang P2996 + libc++"
   while :; do
-    printf "   Compiler [clang]: "
+    printf "   Compiler [gcc]: "
     read -r compiler
-    compiler=${compiler:-clang}
+    compiler=${compiler:-gcc}
     case "$compiler" in
       clang|gcc) break ;;
       *) echo "   Please enter 'clang' or 'gcc'." ;;
@@ -91,7 +91,7 @@ show-defaults:
   set -euo pipefail
   # shellcheck disable=SC1091
   source "{{root}}/load-build-env.sh"
-  compiler="${COMPILER:-clang}"
+  compiler="${COMPILER:-gcc}"
   binding="${MERTON_PYTHON_BINDING:-nanobind}"
   docker_network="${DOCKER_NETWORK:-host}"
   module_dest_dir="${MODULE_DEST_DIR:-}"
@@ -116,7 +116,7 @@ docker-build:
   set -euo pipefail
   # shellcheck disable=SC1091
   source "{{root}}/load-build-env.sh"
-  compiler="${COMPILER:-clang}"
+  compiler="${COMPILER:-gcc}"
   docker_network="${DOCKER_NETWORK:-host}"
   build_network="$docker_network"
   if [[ "$build_network" == "bridge" ]]; then
@@ -142,7 +142,7 @@ versions: docker-build
   #!/usr/bin/env bash
   set -euo pipefail
   source "{{root}}/load-build-env.sh"
-  compiler="${COMPILER:-clang}"
+  compiler="${COMPILER:-gcc}"
   case "$compiler" in
     clang) image_name="${IMAGE_NAME:-merton-refl-build}" ;;
     gcc) image_name="${IMAGE_NAME:-merton-gcc-16}" ;;
@@ -156,7 +156,7 @@ probe: docker-build
   set -euo pipefail
   # shellcheck disable=SC1091
   source "{{root}}/load-build-env.sh"
-  compiler="${COMPILER:-clang}"
+  compiler="${COMPILER:-gcc}"
   docker_network="${DOCKER_NETWORK:-host}"
   case "$compiler" in
     clang)
@@ -192,7 +192,7 @@ build-host: docker-build
   set -euo pipefail
   # shellcheck disable=SC1091
   source "{{root}}/load-build-env.sh"
-  compiler="${COMPILER:-clang}"
+  compiler="${COMPILER:-gcc}"
   binding="${MERTON_PYTHON_BINDING:-nanobind}"
   docker_network="${DOCKER_NETWORK:-host}"
   case "$compiler" in
@@ -216,7 +216,7 @@ test-host: build-host
   set -euo pipefail
   # shellcheck disable=SC1091
   source "{{root}}/load-build-env.sh"
-  compiler="${COMPILER:-clang}"
+  compiler="${COMPILER:-gcc}"
   binding="${MERTON_PYTHON_BINDING:-nanobind}"
   docker_network="${DOCKER_NETWORK:-host}"
   case "$compiler" in
@@ -233,7 +233,7 @@ copy-module:
   set -euo pipefail
   # shellcheck disable=SC1091
   source "{{root}}/load-build-env.sh"
-  compiler="${COMPILER:-clang}"
+  compiler="${COMPILER:-gcc}"
   binding="${MERTON_PYTHON_BINDING:-nanobind}"
   module_dest_dir="${MODULE_DEST_DIR:-}"
   case "$compiler" in
@@ -255,7 +255,7 @@ shell:
   set -euo pipefail
   # shellcheck disable=SC1091
   source "{{root}}/load-build-env.sh"
-  compiler="${COMPILER:-clang}"
+  compiler="${COMPILER:-gcc}"
   case "$compiler" in
     clang) image_name="${IMAGE_NAME:-merton-refl-build}" ;;
     gcc) image_name="${IMAGE_NAME:-merton-gcc-16}" ;;
@@ -276,7 +276,7 @@ build-local:
   set -euo pipefail
   # shellcheck disable=SC1091
   source "{{root}}/load-build-env.sh"
-  compiler="${COMPILER:-clang}"
+  compiler="${COMPILER:-gcc}"
   binding="${MERTON_PYTHON_BINDING:-nanobind}"
   case "$compiler" in
     clang) compiler_tag="clang-p2996"; toolchain="toolchain-p2996.cmake" ;;
@@ -296,7 +296,7 @@ test-local: build-local
   set -euo pipefail
   # shellcheck disable=SC1091
   source "{{root}}/load-build-env.sh"
-  compiler="${COMPILER:-clang}"
+  compiler="${COMPILER:-gcc}"
   binding="${MERTON_PYTHON_BINDING:-nanobind}"
   case "$compiler" in
     clang) compiler_tag="clang-p2996" ;;
@@ -309,7 +309,7 @@ test-local: build-local
 test-compiler-matrix:
   #!/usr/bin/env bash
   set -euo pipefail
-  compiler="${COMPILER:-clang}"
+  compiler="${COMPILER:-gcc}"
   for binding in nanobind pybind11; do
     echo "=== COMPILER=$compiler MERTON_PYTHON_BINDING=$binding ==="
     COMPILER="$compiler" MERTON_PYTHON_BINDING="$binding" just test-host

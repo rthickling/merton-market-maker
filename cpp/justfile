@@ -309,6 +309,8 @@ test-local: build-local
 test-compiler-matrix:
   #!/usr/bin/env bash
   set -euo pipefail
+  # shellcheck disable=SC1091
+  source "{{root}}/load-build-env.sh"
   compiler="${COMPILER:-gcc}"
   for binding in nanobind pybind11; do
     echo "=== COMPILER=$compiler MERTON_PYTHON_BINDING=$binding ==="

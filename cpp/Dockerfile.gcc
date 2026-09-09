@@ -1,87 +1,101 @@
-# GCC 16.2 reflection toolchain + QuantLib (libstdc++) + Python 3.9.
-# Target: linux/amd64. No -march=native.
-ARG UBUNTU_VERSION=22.04
-ARG PYTHON_VERSION=3.9
-ARG QUANTLIB_VERSION=1.33
+# Released GCC 16.2 + libstdc++ + QuantLib + pinned CPython environment.
+# Target: linux/amd64. No CPU-specific optimisation.
+ARG UBUNTU_IMAGE=ubuntu:22.04@sha256:79676deb51ebb02885b0b9d33788e78a37cf1045ad79d1bb04c6a222c3556b3d
+ARG UBUNTU_SNAPSHOT=20260901T000000Z
+ARG CA_CERTIFICATES_VERSION=20260601~22.04.1
+ARG PYTHON_VERSION=3.9.25
+ARG PYTHON_SHA256=00e07d7c0f2f0cc002432d1ee84d2a40dae404a99303e3f97701c10966c91834
 ARG GCC_VERSION=16.2.0
-# Official sha512.sum for gcc-16.2.0.tar.xz (sourceware.org/ftp/gcc/releases/gcc-16.2.0/)
-ARG GCC_TARBALL_SHA512=c51c30ca7422d0cbecf504b2e0f33c3aca31e0f90a76b65217f465163fa6fa17b3f5de39e145c47e5bab90ac0ce7fff3b03c8d553ae36e01faaea5a50f8648d1
-# Computed locally from QuantLib-1.33.tar.gz release asset.
-ARG QUANTLIB_TARBALL_SHA256=4810d789261eb36423c7d277266a6ee3b28a3c05af1ee0d45544ca2e0e8312bd
+ARG GCC_SHA512=c51c30ca7422d0cbecf504b2e0f33c3aca31e0f90a76b65217f465163fa6fa17b3f5de39e145c47e5bab90ac0ce7fff3b03c8d553ae36e01faaea5a50f8648d1
+ARG QUANTLIB_VERSION=1.33
+ARG QUANTLIB_SHA256=4810d789261eb36423c7d277266a6ee3b28a3c05af1ee0d45544ca2e0e8312bd
+ARG JUST_VERSION=1.58.0
+ARG JUST_SHA256=4a5cc2f53e6f0f8c59092a6cc38291eb729d46a7dd95d3ae582008881b84931d
 
-# --- STAGE 1: Build released GCC from official source ---
-FROM ubuntu:${UBUNTU_VERSION} AS gcc-builder
+FROM ${UBUNTU_IMAGE} AS ubuntu-snapshot
 SHELL ["/bin/bash", "-c"]
+ARG UBUNTU_SNAPSHOT CA_CERTIFICATES_VERSION
+# The minimal Ubuntu image has no CA bundle. APT still verifies signed Release
+# metadata and package hashes while TLS peer verification is disabled solely
+# for installing the exact CA package from the pinned snapshot.
+RUN sed -Ei "s#http://(archive|security).ubuntu.com/ubuntu/?#https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}/#g" /etc/apt/sources.list && \
+    echo 'Acquire::https::Verify-Peer "false";' > /etc/apt/apt.conf.d/99snapshot-bootstrap && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates=${CA_CERTIFICATES_VERSION} && \
+    rm /etc/apt/apt.conf.d/99snapshot-bootstrap && \
+    apt-get update && rm -rf /var/lib/apt/lists/*
 
-ARG DEBIAN_FRONTEND=noninteractive
-ARG GCC_VERSION
-ARG GCC_TARBALL_SHA512
-ENV TZ=UTC
-
+FROM ubuntu-snapshot AS python-builder
+SHELL ["/bin/bash", "-c"]
+ARG PYTHON_VERSION PYTHON_SHA256
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential ca-certificates curl xz-utils file \
-    flex bison texinfo \
-    libgmp-dev libmpfr-dev libmpc-dev libisl-dev \
-    && rm -rf /var/lib/apt/lists/*
+      build-essential curl xz-utils \
+      libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
+      libffi-dev liblzma-dev libgdbm-dev libncursesw5-dev uuid-dev && \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /tmp
+RUN set -euo pipefail && \
+    curl -fsSLO https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tar.xz && \
+    echo "${PYTHON_SHA256}  Python-${PYTHON_VERSION}.tar.xz" | sha256sum -c - && \
+    tar -xf Python-${PYTHON_VERSION}.tar.xz && mkdir python-build && cd python-build && \
+    ../Python-${PYTHON_VERSION}/configure --prefix=/opt/python-3.9 --with-ensurepip=install && \
+    make -j"$(nproc)" && make altinstall && \
+    /opt/python-3.9/bin/python3.9 --version
 
+FROM ubuntu-snapshot AS gcc-builder
+SHELL ["/bin/bash", "-c"]
+ARG GCC_VERSION GCC_SHA512
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential curl xz-utils file flex bison texinfo \
+      libgmp-dev libmpfr-dev libmpc-dev libisl-dev && \
+    rm -rf /var/lib/apt/lists/*
 WORKDIR /tmp
 RUN set -euo pipefail && \
     curl -fsSL -o gcc-${GCC_VERSION}.tar.xz \
-      https://sourceware.org/pub/gcc/releases/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.xz && \
-    echo "${GCC_TARBALL_SHA512}  gcc-${GCC_VERSION}.tar.xz" | sha512sum -c - && \
-    tar -xf gcc-${GCC_VERSION}.tar.xz && \
-    mkdir gcc-build && cd gcc-build && \
+      "https://sourceware.org/pub/gcc/releases/gcc-${GCC_VERSION}/gcc-${GCC_VERSION}.tar.xz" && \
+    echo "${GCC_SHA512}  gcc-${GCC_VERSION}.tar.xz" | sha512sum -c - && \
+    tar -xf gcc-${GCC_VERSION}.tar.xz && mkdir gcc-build && cd gcc-build && \
     ../gcc-${GCC_VERSION}/configure \
-      --prefix=/opt/gcc-16 \
-      --disable-multilib \
-      --enable-languages=c,c++ \
-      --disable-bootstrap \
-      --disable-nls && \
-    make -j"$(nproc)" && \
-    make install-strip && \
+      --prefix=/opt/gcc-16 --disable-multilib --enable-languages=c,c++ \
+      --disable-bootstrap --disable-nls && \
+    make -j"$(nproc)" && make install-strip && \
+    /opt/gcc-16/bin/g++ --version | head -n 1 && \
     cd / && rm -rf /tmp/gcc-${GCC_VERSION} /tmp/gcc-${GCC_VERSION}.tar.xz /tmp/gcc-build
 
-# --- STAGE 2: Python + QuantLib with GCC 16 / libstdc++ ---
-FROM ubuntu:${UBUNTU_VERSION}
+FROM ubuntu-snapshot
 SHELL ["/bin/bash", "-c"]
-
-ARG DEBIAN_FRONTEND=noninteractive
-ARG PYTHON_VERSION
-ARG QUANTLIB_VERSION
-ARG QUANTLIB_TARBALL_SHA256
-ENV TZ=UTC
-ENV PYTHON_VERSION=${PYTHON_VERSION}
-ENV QUANTLIB_VERSION=${QUANTLIB_VERSION}
-
+ARG UBUNTU_IMAGE UBUNTU_SNAPSHOT PYTHON_VERSION GCC_VERSION
+ARG QUANTLIB_VERSION QUANTLIB_SHA256 JUST_VERSION JUST_SHA256
+ENV TZ=UTC \
+    MERTON_BASE_IMAGE=${UBUNTU_IMAGE} \
+    UBUNTU_SNAPSHOT=${UBUNTU_SNAPSHOT} \
+    JUST_VERSION=${JUST_VERSION} \
+    PYTHON_VERSION=${PYTHON_VERSION} \
+    QUANTLIB_VERSION=${QUANTLIB_VERSION} \
+    GCC_VERSION=${GCC_VERSION}
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    software-properties-common ca-certificates curl wget gnupg \
-    && add-apt-repository universe \
-    && add-apt-repository ppa:deadsnakes/ppa \
-    && apt-get update && apt-get install -y --no-install-recommends \
-    build-essential cmake ninja-build pkg-config \
-    git \
-    python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-distutils python3-pip \
-    libboost-all-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY requirements-docker.txt /tmp/requirements-docker.txt
-RUN python3 -m pip install --no-cache-dir -r /tmp/requirements-docker.txt && \
-    python${PYTHON_VERSION} -m pip install --no-cache-dir -r /tmp/requirements-docker.txt && \
-    rm -f /tmp/requirements-docker.txt
-
-RUN curl -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
-
+      build-essential cmake ninja-build pkg-config git curl xz-utils \
+      libboost-all-dev \
+      libssl3 zlib1g libbz2-1.0 libreadline8 libsqlite3-0 libffi8 liblzma5 libgdbm6 libncursesw6 libuuid1 && \
+    rm -rf /var/lib/apt/lists/*
+COPY --from=python-builder /opt/python-3.9 /opt/python-3.9
 COPY --from=gcc-builder /opt/gcc-16 /opt/gcc-16
-ENV PATH="/opt/gcc-16/bin:$PATH"
-ENV LD_LIBRARY_PATH="/opt/gcc-16/lib64"
-ENV CC="/opt/gcc-16/bin/gcc"
-ENV CXX="/opt/gcc-16/bin/g++"
-
-# QuantLib with the same g++ / libstdc++ (do not mix with libc++).
+ENV PATH="/opt/python-3.9/bin:/opt/gcc-16/bin:$PATH" \
+    LD_LIBRARY_PATH="/opt/gcc-16/lib64" \
+    CC="/opt/gcc-16/bin/gcc" \
+    CXX="/opt/gcc-16/bin/g++"
+COPY requirements-docker.lock /tmp/requirements-docker.lock
+RUN python3.9 -m pip install --no-cache-dir --require-hashes -r /tmp/requirements-docker.lock && \
+    rm -f /tmp/requirements-docker.lock
 RUN set -euo pipefail && cd /tmp && \
-    wget -q -O QuantLib-${QUANTLIB_VERSION}.tar.gz \
-      https://github.com/lballabio/QuantLib/releases/download/v${QUANTLIB_VERSION}/QuantLib-${QUANTLIB_VERSION}.tar.gz && \
-    echo "${QUANTLIB_TARBALL_SHA256}  QuantLib-${QUANTLIB_VERSION}.tar.gz" | sha256sum -c - && \
+    curl -fsSLO "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz" && \
+    echo "${JUST_SHA256}  just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz" | sha256sum -c - && \
+    tar -xzf "just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz" -C /usr/local/bin just && \
+    rm "just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+RUN set -euo pipefail && cd /tmp && \
+    curl -fsSL -o QuantLib-${QUANTLIB_VERSION}.tar.gz \
+      "https://github.com/lballabio/QuantLib/releases/download/v${QUANTLIB_VERSION}/QuantLib-${QUANTLIB_VERSION}.tar.gz" && \
+    echo "${QUANTLIB_SHA256}  QuantLib-${QUANTLIB_VERSION}.tar.gz" | sha256sum -c - && \
     tar xzf QuantLib-${QUANTLIB_VERSION}.tar.gz && cd QuantLib-${QUANTLIB_VERSION} && \
     sed -i 's/boost::numeric_cast<Integer>(/static_cast<Integer>(/g' ql/time/daycounters/yearfractiontodate.cpp && \
     CPPFLAGS="-DQL_USE_STD_SHARED_PTR" \
@@ -90,5 +104,6 @@ RUN set -euo pipefail && cd /tmp && \
       --disable-test-suite --disable-examples && \
     make -j"$(nproc)" && make install && \
     cd / && rm -rf /tmp/QuantLib-${QUANTLIB_VERSION} /tmp/QuantLib-${QUANTLIB_VERSION}.tar.gz
-
+COPY print-build-info.sh /usr/local/bin/merton-build-info
+RUN chmod +x /usr/local/bin/merton-build-info && merton-build-info
 WORKDIR /workspace

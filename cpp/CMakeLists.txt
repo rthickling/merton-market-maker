@@ -45,6 +45,12 @@ if(NOT JD_QUANTLIB_INCLUDE_DIR OR NOT JD_QUANTLIB_LIBRARY)
         "QuantLib not found. Expected headers/libs under ${JD_QL_ROOT}.\n"
         "Set REFLECT_PY_STRAT_QL_INSTALL_DIR or install QuantLib dev libs.")
 endif()
+file(STRINGS "${JD_QUANTLIB_INCLUDE_DIR}/ql/version.hpp" _MERTON_QL_VERSION_LINE
+    REGEX "^#define QL_VERSION ")
+string(REGEX REPLACE ".*\"([^\"]+)\".*" "\\1" MERTON_QUANTLIB_VERSION
+    "${_MERTON_QL_VERSION_LINE}")
+message(STATUS "Merton compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
+message(STATUS "Merton QuantLib: ${MERTON_QUANTLIB_VERSION} (${JD_QUANTLIB_LIBRARY})")
 target_include_directories(merton_core PRIVATE "${JD_QUANTLIB_INCLUDE_DIR}")
 target_link_libraries(merton_core PUBLIC "${JD_QUANTLIB_LIBRARY}")
 

@@ -48,7 +48,7 @@ Both backends expose the same Python-facing API and the same reflected public me
 
 ## Binding Surface
 
-The extension module `merton_online_calibrator` exposes the following API (filename may be `merton_online_calibrator.so` with `pybind11` or a Python-tagged suffix with `nanobind`):
+Both binding backends emit the plain extension filename `merton_online_calibrator.so` and expose the following API:
 
 - constructor: `OnlineMertonCalibrator(MertonParams initial, CalibratorConfig config={})`
 - `bool update_tick(double price, int64_t epoch_us)`

@@ -1,74 +1,110 @@
-# Build args for easy retargeting (e.g. Python/Ubuntu updates).
-ARG UBUNTU_VERSION=22.04
-ARG PYTHON_VERSION=3.9
+# Bloomberg Clang P2996 + libc++ + QuantLib + pinned CPython environment.
+# Target: linux/amd64. All mutable source inputs are content-pinned.
+ARG UBUNTU_IMAGE=ubuntu:22.04@sha256:79676deb51ebb02885b0b9d33788e78a37cf1045ad79d1bb04c6a222c3556b3d
+ARG UBUNTU_SNAPSHOT=20260901T000000Z
+ARG CA_CERTIFICATES_VERSION=20260601~22.04.1
+ARG PYTHON_VERSION=3.9.25
+ARG PYTHON_SHA256=00e07d7c0f2f0cc002432d1ee84d2a40dae404a99303e3f97701c10966c91834
+ARG CLANG_P2996_COMMIT=8d4d081152618abcccf9f1abb3ee94db42b6ad9f
 ARG QUANTLIB_VERSION=1.33
-ARG CLANG_P2996_BRANCH=p2996
+ARG QUANTLIB_SHA256=4810d789261eb36423c7d277266a6ee3b28a3c05af1ee0d45544ca2e0e8312bd
+ARG JUST_VERSION=1.58.0
+ARG JUST_SHA256=4a5cc2f53e6f0f8c59092a6cc38291eb729d46a7dd95d3ae582008881b84931d
 
-# --- STAGE 1: Build the Experimental Compiler ---
-	FROM ubuntu:${UBUNTU_VERSION} AS builder
+FROM ${UBUNTU_IMAGE} AS ubuntu-snapshot
+SHELL ["/bin/bash", "-c"]
+ARG UBUNTU_SNAPSHOT CA_CERTIFICATES_VERSION
+# The minimal Ubuntu image has no CA bundle. APT still verifies signed Release
+# metadata and package hashes while TLS peer verification is disabled solely
+# for installing the exact CA package from the pinned snapshot.
+RUN sed -Ei "s#http://(archive|security).ubuntu.com/ubuntu/?#https://snapshot.ubuntu.com/ubuntu/${UBUNTU_SNAPSHOT}/#g" /etc/apt/sources.list && \
+    echo 'Acquire::https::Verify-Peer "false";' > /etc/apt/apt.conf.d/99snapshot-bootstrap && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates=${CA_CERTIFICATES_VERSION} && \
+    rm /etc/apt/apt.conf.d/99snapshot-bootstrap && \
+    apt-get update && rm -rf /var/lib/apt/lists/*
 
-	RUN apt-get update && apt-get install -y \
-		git cmake ninja-build build-essential python3 lld \
-		libedit-dev libncurses-dev
-	
-	WORKDIR /llvm-project
-	ARG CLANG_P2996_BRANCH
-	RUN git clone --depth 1 --branch ${CLANG_P2996_BRANCH} https://github.com/bloomberg/clang-p2996.git .
-	
-	RUN cmake -S llvm -B build -G Ninja \
-		-DCMAKE_BUILD_TYPE=Release \
-		-DLLVM_ENABLE_PROJECTS="clang" \
-		-DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi;libunwind" \
-		-DLLVM_TARGETS_TO_BUILD="X86" \
-		-DLLVM_USE_LINKER=lld \
-		-DCMAKE_INSTALL_PREFIX=/opt/clang-p2996
-	
-	RUN ninja -C build install
-	
-	# --- STAGE 2: Python + QuantLib (P2996 Clang, libc++, QL_USE_STD_SHARED_PTR) ---
-	FROM ubuntu:${UBUNTU_VERSION}
+FROM ubuntu-snapshot AS python-builder
+SHELL ["/bin/bash", "-c"]
+ARG PYTHON_VERSION PYTHON_SHA256
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential curl xz-utils \
+      libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
+      libffi-dev liblzma-dev libgdbm-dev libncursesw5-dev uuid-dev && \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /tmp
+RUN set -euo pipefail && \
+    curl -fsSLO https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tar.xz && \
+    echo "${PYTHON_SHA256}  Python-${PYTHON_VERSION}.tar.xz" | sha256sum -c - && \
+    tar -xf Python-${PYTHON_VERSION}.tar.xz && mkdir python-build && cd python-build && \
+    ../Python-${PYTHON_VERSION}/configure --prefix=/opt/python-3.9 --with-ensurepip=install && \
+    make -j"$(nproc)" && make altinstall && \
+    /opt/python-3.9/bin/python3.9 --version
 
-	ARG DEBIAN_FRONTEND=noninteractive
-	ARG PYTHON_VERSION
-	ARG QUANTLIB_VERSION
-	ENV TZ=UTC
-	ENV PYTHON_VERSION=${PYTHON_VERSION}
-	ENV QUANTLIB_VERSION=${QUANTLIB_VERSION}
+FROM ubuntu-snapshot AS clang-builder
+SHELL ["/bin/bash", "-c"]
+ARG CLANG_P2996_COMMIT
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git cmake ninja-build build-essential python3 lld \
+      libedit-dev libncurses-dev && \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /llvm-project
+RUN set -euo pipefail && \
+    git init . && git remote add origin https://github.com/bloomberg/clang-p2996.git && \
+    git fetch --depth 1 origin "${CLANG_P2996_COMMIT}" && \
+    git checkout --detach FETCH_HEAD && \
+    test "$(git rev-parse HEAD)" = "${CLANG_P2996_COMMIT}"
+RUN cmake -S llvm -B build -G Ninja \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DLLVM_ENABLE_PROJECTS="clang" \
+      -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi;libunwind" \
+      -DLLVM_TARGETS_TO_BUILD="X86" \
+      -DLLVM_USE_LINKER=lld \
+      -DCMAKE_INSTALL_PREFIX=/opt/clang-p2996 && \
+    ninja -C build install
 
-	RUN apt-get update && apt-get install -y software-properties-common && \
-		add-apt-repository universe && \
-		add-apt-repository ppa:deadsnakes/ppa && \
-		apt-get update && apt-get install -y \
-		build-essential cmake ninja-build pkg-config \
-		git wget curl ca-certificates \
-		python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-distutils python3-pip \
-		libedit2 libboost-all-dev && \
-		rm -rf /var/lib/apt/lists/*
-
-COPY requirements-docker.txt /tmp/requirements-docker.txt
-RUN python3 -m pip install --no-cache-dir -r /tmp/requirements-docker.txt && \
-	python${PYTHON_VERSION} -m pip install --no-cache-dir -r /tmp/requirements-docker.txt && \
-	rm -f /tmp/requirements-docker.txt
-
-	# Install just (recipe runner for justfile)
-	RUN curl -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
-
-	COPY --from=builder /opt/clang-p2996 /opt/clang-p2996
-	ENV PATH="/opt/clang-p2996/bin:$PATH"
-	ENV CXX="/opt/clang-p2996/bin/clang++"
-	ENV CC="/opt/clang-p2996/bin/clang"
-
-	# Build QuantLib from source (PIC static, std=c++14, QL_USE_STD_SHARED_PTR)
-	# and install to /opt/ql_install so CMake can find it when building the module.
-	RUN set -e && cd /tmp && \
-		wget -q https://github.com/lballabio/QuantLib/releases/download/v${QUANTLIB_VERSION}/QuantLib-${QUANTLIB_VERSION}.tar.gz && \
-		tar xzf QuantLib-${QUANTLIB_VERSION}.tar.gz && cd QuantLib-${QUANTLIB_VERSION} && \
-		sed -i 's/boost::numeric_cast<Integer>(/static_cast<Integer>(/g' ql/time/daycounters/yearfractiontodate.cpp && \
-		CPPFLAGS="-D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION -DQL_USE_STD_SHARED_PTR" \
-		CXXFLAGS="-O3 -fPIC -ffunction-sections -fdata-sections -std=c++14 -stdlib=libc++" LDFLAGS="-stdlib=libc++" \
-		./configure --prefix=/opt/ql_install --with-pic --disable-shared --enable-static \
-			--disable-test-suite --disable-examples && \
-		make -j$(nproc) && make install && \
-		cd / && rm -rf /tmp/QuantLib-${QUANTLIB_VERSION} /tmp/QuantLib-${QUANTLIB_VERSION}.tar.gz
-
-	WORKDIR /workspace
+FROM ubuntu-snapshot
+SHELL ["/bin/bash", "-c"]
+ARG UBUNTU_IMAGE UBUNTU_SNAPSHOT PYTHON_VERSION CLANG_P2996_COMMIT
+ARG QUANTLIB_VERSION QUANTLIB_SHA256 JUST_VERSION JUST_SHA256
+ENV TZ=UTC \
+    MERTON_BASE_IMAGE=${UBUNTU_IMAGE} \
+    UBUNTU_SNAPSHOT=${UBUNTU_SNAPSHOT} \
+    JUST_VERSION=${JUST_VERSION} \
+    PYTHON_VERSION=${PYTHON_VERSION} \
+    QUANTLIB_VERSION=${QUANTLIB_VERSION} \
+    CLANG_P2996_COMMIT=${CLANG_P2996_COMMIT}
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential cmake ninja-build pkg-config git curl xz-utils \
+      libedit2 libboost-all-dev \
+      libssl3 zlib1g libbz2-1.0 libreadline8 libsqlite3-0 libffi8 liblzma5 libgdbm6 libncursesw6 libuuid1 && \
+    rm -rf /var/lib/apt/lists/*
+COPY --from=python-builder /opt/python-3.9 /opt/python-3.9
+COPY --from=clang-builder /opt/clang-p2996 /opt/clang-p2996
+ENV PATH="/opt/python-3.9/bin:/opt/clang-p2996/bin:$PATH" \
+    CXX="/opt/clang-p2996/bin/clang++" \
+    CC="/opt/clang-p2996/bin/clang"
+COPY requirements-docker.lock /tmp/requirements-docker.lock
+RUN python3.9 -m pip install --no-cache-dir --require-hashes -r /tmp/requirements-docker.lock && \
+    rm -f /tmp/requirements-docker.lock
+RUN set -euo pipefail && cd /tmp && \
+    curl -fsSLO "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz" && \
+    echo "${JUST_SHA256}  just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz" | sha256sum -c - && \
+    tar -xzf "just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz" -C /usr/local/bin just && \
+    rm "just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+RUN set -euo pipefail && cd /tmp && \
+    curl -fsSL -o QuantLib-${QUANTLIB_VERSION}.tar.gz \
+      "https://github.com/lballabio/QuantLib/releases/download/v${QUANTLIB_VERSION}/QuantLib-${QUANTLIB_VERSION}.tar.gz" && \
+    echo "${QUANTLIB_SHA256}  QuantLib-${QUANTLIB_VERSION}.tar.gz" | sha256sum -c - && \
+    tar xzf QuantLib-${QUANTLIB_VERSION}.tar.gz && cd QuantLib-${QUANTLIB_VERSION} && \
+    sed -i 's/boost::numeric_cast<Integer>(/static_cast<Integer>(/g' ql/time/daycounters/yearfractiontodate.cpp && \
+    CPPFLAGS="-D_LIBCPP_ENABLE_CXX17_REMOVED_UNARY_BINARY_FUNCTION -DQL_USE_STD_SHARED_PTR" \
+    CXXFLAGS="-O3 -fPIC -ffunction-sections -fdata-sections -std=c++14 -stdlib=libc++" \
+    LDFLAGS="-stdlib=libc++" \
+    ./configure --prefix=/opt/ql_install --with-pic --disable-shared --enable-static \
+      --disable-test-suite --disable-examples && \
+    make -j"$(nproc)" && make install && \
+    cd / && rm -rf /tmp/QuantLib-${QUANTLIB_VERSION} /tmp/QuantLib-${QUANTLIB_VERSION}.tar.gz
+COPY print-build-info.sh /usr/local/bin/merton-build-info
+RUN chmod +x /usr/local/bin/merton-build-info && merton-build-info
+WORKDIR /workspace

@@ -1,0 +1,59 @@
+name: C++ toolchain matrix
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: cpp-toolchains-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  clean-build-and-test:
+    name: ${{ matrix.compiler }} / nanobind + pybind11
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [clang, gcc]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install pinned just
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=1.58.0
+          archive="just-${version}-x86_64-unknown-linux-musl.tar.gz"
+          curl -fsSLO "https://github.com/casey/just/releases/download/${version}/${archive}"
+          echo "4a5cc2f53e6f0f8c59092a6cc38291eb729d46a7dd95d3ae582008881b84931d  ${archive}" | sha256sum -c -
+          sudo tar -xzf "${archive}" -C /usr/local/bin just
+          just --version
+
+      - name: Clean-build pinned toolchain image
+        working-directory: cpp
+        env:
+          COMPILER: ${{ matrix.compiler }}
+          DOCKER_NETWORK: bridge
+        run: just docker-build-clean
+
+      - name: Verify pinned versions and reflection probe
+        working-directory: cpp
+        env:
+          COMPILER: ${{ matrix.compiler }}
+          DOCKER_NETWORK: bridge
+        run: |
+          just versions
+          just probe
+
+      - name: Build, import, and test both bindings
+        working-directory: cpp
+        env:
+          COMPILER: ${{ matrix.compiler }}
+          DOCKER_NETWORK: bridge
+        run: just test-compiler-matrix

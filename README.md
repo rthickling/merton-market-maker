@@ -30,7 +30,7 @@ Instead of writing a manual binding stanza for every C++ function, this project 
 ```c++
 template <typename T>
 void bind_reflected_member_functions(/* backend class wrapper */& cl) {
-    constexpr auto members = std::define_static_array(
+    static constexpr auto members = std::define_static_array(
         std::meta::members_of(^^T, std::meta::access_context::current()));
 
     template for (constexpr auto m : members) {
@@ -71,20 +71,24 @@ Note the new C++ syntax: the reflection operator `^^T` converts a type into a re
 I chose the MJD model because its math is heavy. It requires infinite-series-style mixture summations that would be much slower in pure Python. It illustrates the "Speed-to-Book" need for compiled math, while the high-level trading logic still benefits from Python's "Speed-to-Market."
 
 ## Technical Stack
-Since C++26 reflection currently requires the experimental Bloomberg Clang P2996 fork, the toolchain is containerized and exposed via a `justfile`.
+C++26 reflection is built with either released GCC 16.2 and libstdc++ or the pinned Bloomberg Clang P2996 fork and libc++. Both toolchains support the nanobind and pybind11 backends and run entirely in pinned `linux/amd64` Docker environments.
 
-### Prerequisites
-* [Docker](https://www.docker.com/)
-* [`just`](https://github.com/casey/just)
+### Build and test from a fresh clone
+Prerequisites: [Docker](https://www.docker.com/) and [`just`](https://github.com/casey/just).
 
-See [BUILD](/cpp/BUILD.md) for complete information on building and running, including `MERTON_PYTHON_BINDING` for choosing `pybind11` or `nanobind`. For first-time setup, run `cd cpp && just setup-defaults`, or start from `cpp/.merton-build.env.example`.
+```bash
+cd cpp
+just test
+```
+
+This builds and tests the default Clang/nanobind combination. Run `just test-matrix` for GCC and Clang with both binding backends. See [BUILD](cpp/BUILD.md) for compiler selection, output paths, clean builds, and explicit deployment copying.
 
 ## References & Further Reading
 * Blog Post: [Stop Choosing: Get C++ Performance in Python Algos with C++26](https://profitview.net/blog/cpp26-reflection-python-algo-trading)
 * [P2996 - Reflection for C++26](https://wg21.link/p2996)
 * [Callum Piper](https://www.linkedin.com/in/callum-piper-3691373/)'s [talk](https://youtu.be/SJ0NFLpR9vE) from ACCU 2025.
 * Reference deployment: [ProfitView](https://profitview.net/).
-* See [THEORY](/cpp/THEORY.md)
+* See [THEORY](cpp/THEORY.md)
 * [nanobind: tiny and efficient C++/Python bindings](https://github.com/wjakob/nanobind)
 
 If you need more information or are interested in building a system using C++ reflection, feel free to contact me:

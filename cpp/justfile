@@ -118,6 +118,10 @@ docker-build:
   source "{{root}}/load-build-env.sh"
   compiler="${COMPILER:-clang}"
   docker_network="${DOCKER_NETWORK:-host}"
+  build_network="$docker_network"
+  if [[ "$build_network" == "bridge" ]]; then
+    build_network="default"
+  fi
   case "$compiler" in
     clang) image_name="${IMAGE_NAME:-merton-refl-build}"; dockerfile="Dockerfile" ;;
     gcc) image_name="${IMAGE_NAME:-merton-gcc-16}"; dockerfile="Dockerfile.gcc" ;;
@@ -127,7 +131,7 @@ docker-build:
   if [[ "${DOCKER_NO_CACHE:-0}" == "1" ]]; then
     no_cache_args+=(--pull --no-cache)
   fi
-  docker build "${no_cache_args[@]}" --platform=linux/amd64 --network="$docker_network" -t "$image_name" \
+  docker build "${no_cache_args[@]}" --platform=linux/amd64 --network="$build_network" -t "$image_name" \
     -f "{{root}}/$dockerfile" \
     "{{root}}"
 

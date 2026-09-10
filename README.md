@@ -81,11 +81,12 @@ cd cpp
 just demo
 ```
 
-This builds the default GCC/nanobind/CPython 3.12 module and streams Binance `BTCUSDT` futures bookTicker quotes into the C++ calibrator (paper quotes only). Optional historical warmup: set `MERTON_MARKET_MAKER_DATA_PATH` to a CSV/Parquet directory. ProfitView is not required.
+This builds the default GCC/nanobind/CPython 3.12 module and streams Binance USD-M bookTicker quotes into the C++ calibrator (paper quotes only). Default symbol is `BTCUSDT`. Selectable perps: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `XRPUSDT`, `XAUUSDT`. Funding is annualized from each contract’s live interval (8h/4h/1h). Optional historical warmup: set `MERTON_MARKET_MAKER_DATA_PATH` to a CSV/Parquet directory. ProfitView is not required.
 
 ```bash
 just test                 # build and pytest the selected toolchain
 just test-matrix          # GCC and Clang, both bindings (reuses Docker cache)
+MERTON_SYMBOL=ETHUSDT just demo  # another high-volume perp
 PYTHON_VERSION=3.13 just demo   # recent CPython
 PYTHON_VERSION=3.9.25 just test # ProfitView ABI, then just copy-module
 ```

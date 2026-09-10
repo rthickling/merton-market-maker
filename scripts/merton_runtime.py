@@ -10,8 +10,10 @@ import os
 from dataclasses import dataclass
 from typing import Any, Optional
 
-T_HOURS = 8
-T_YEARS = T_HOURS / (365.25 * 24)
+HOURS_PER_YEAR = 365.25 * 24
+DEFAULT_FUNDING_INTERVAL_HOURS = 8.0
+T_HOURS = DEFAULT_FUNDING_INTERVAL_HOURS  # BitMEX / ProfitView default horizon
+T_YEARS = T_HOURS / HOURS_PER_YEAR
 MIN_HALF_SPREAD_BPS = float(os.getenv("MERTON_MIN_HALF_SPREAD_BPS", "2.0"))
 QL_MONITOR_EVERY_N_QUOTES = int(os.getenv("MERTON_QL_MONITOR_EVERY_N_QUOTES", "120"))
 
@@ -47,9 +49,23 @@ def merton_theoretical(
     return S0 * math.exp(drift * T_years)
 
 
-def funding_annual(rate_per_8h: float) -> float:
-    """Convert a per-8h funding rate to annualized (simple, matching live path)."""
-    return rate_per_8h * (365.25 * 24 / 8)
+def horizon_years(interval_hours: float = DEFAULT_FUNDING_INTERVAL_HOURS) -> float:
+    """Pricing horizon T matching one funding interval."""
+    hours = float(interval_hours)
+    if hours <= 0:
+        raise ValueError("funding interval hours must be positive")
+    return hours / HOURS_PER_YEAR
+
+
+def funding_annual(
+    rate_per_interval: float,
+    interval_hours: float = DEFAULT_FUNDING_INTERVAL_HOURS,
+) -> float:
+    """Annualize a per-interval funding rate (Binance lastFundingRate is per current interval)."""
+    hours = float(interval_hours)
+    if hours <= 0:
+        raise ValueError("funding interval hours must be positive")
+    return float(rate_per_interval) * (HOURS_PER_YEAR / hours)
 
 
 def paper_quotes(theo: float, mkt_bid: float, mkt_ask: float, min_half_spread_bps: float = MIN_HALF_SPREAD_BPS) -> tuple[float, float]:

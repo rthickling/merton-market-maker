@@ -165,7 +165,8 @@ for each market tick (price, ts_us):
             params = calibrator.params()
             # optional: log/store params
 
-    q_annual = funding_to_annual(funding_rate_8h)
+    q_annual = funding_to_annual(funding_rate, interval_hours)  # Binance: live 8h/4h/1h
+    T_years = interval_hours / (365.25 * 24)
     fair = calibrator.fair_value(price_or_mid, q_annual, T_years, r=0.0)
     diff = fair - market_price
     # publish signal / apply strategy logic

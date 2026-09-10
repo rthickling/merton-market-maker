@@ -73,15 +73,24 @@ I chose the MJD model because its math is heavy. It requires infinite-series-sty
 ## Technical Stack
 C++26 reflection is built with either released GCC 16.2 and libstdc++ or the pinned Bloomberg Clang P2996 fork and libc++. Both toolchains support the nanobind and pybind11 backends and run entirely in pinned `linux/amd64` Docker environments.
 
-### Build and test from a fresh clone
+### Run the algo from a fresh clone
 Prerequisites: [Docker](https://www.docker.com/) and [`just`](https://github.com/casey/just).
 
 ```bash
 cd cpp
-just test
+just demo
 ```
 
-This builds and tests the default GCC/nanobind combination. Run `just test-matrix` for GCC and Clang with both binding backends. See [BUILD](cpp/BUILD.md) for compiler selection, output paths, clean image rebuilds, and explicit deployment copying.
+This builds the default GCC/nanobind/CPython 3.12 module and streams Binance `BTCUSDT` futures bookTicker quotes into the C++ calibrator (paper quotes only). Optional historical warmup: set `MERTON_MARKET_MAKER_DATA_PATH` to a CSV/Parquet directory. ProfitView is not required.
+
+```bash
+just test                 # build and pytest the selected toolchain
+just test-matrix          # GCC and Clang, both bindings (reuses Docker cache)
+PYTHON_VERSION=3.13 just demo   # recent CPython
+PYTHON_VERSION=3.9.25 just test # ProfitView ABI, then just copy-module
+```
+
+See [BUILD](cpp/BUILD.md) for compiler, Python, output paths, clean image rebuilds, and optional ProfitView copying.
 
 ## References & Further Reading
 * Blog Post: [Stop Choosing: Get C++ Performance in Python Algos with C++26](https://profitview.net/blog/cpp26-reflection-python-algo-trading)

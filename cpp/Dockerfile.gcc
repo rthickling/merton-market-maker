@@ -3,8 +3,9 @@
 ARG UBUNTU_IMAGE=ubuntu:22.04@sha256:79676deb51ebb02885b0b9d33788e78a37cf1045ad79d1bb04c6a222c3556b3d
 ARG UBUNTU_SNAPSHOT=20260901T000000Z
 ARG CA_CERTIFICATES_VERSION=20260601~22.04.1
-ARG PYTHON_VERSION=3.9.25
-ARG PYTHON_SHA256=00e07d7c0f2f0cc002432d1ee84d2a40dae404a99303e3f97701c10966c91834
+ARG PYTHON_VERSION=3.12.11
+ARG PYTHON_MM=3.12
+ARG PYTHON_SHA256=c30bb24b7f1e9a19b11b55a546434f74e739bb4c271a3e3a80ff4380d49f7adb
 ARG GCC_VERSION=16.2.0
 ARG GCC_SHA512=c51c30ca7422d0cbecf504b2e0f33c3aca31e0f90a76b65217f465163fa6fa17b3f5de39e145c47e5bab90ac0ce7fff3b03c8d553ae36e01faaea5a50f8648d1
 ARG QUANTLIB_VERSION=1.33
@@ -27,7 +28,7 @@ RUN sed -Ei "s#http://(archive|security).ubuntu.com/ubuntu/?#https://snapshot.ub
 
 FROM ubuntu-snapshot AS python-builder
 SHELL ["/bin/bash", "-c"]
-ARG PYTHON_VERSION PYTHON_SHA256
+ARG PYTHON_VERSION PYTHON_SHA256 PYTHON_MM
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential curl xz-utils \
       libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
@@ -38,9 +39,10 @@ RUN set -euo pipefail && \
     curl -fsSLO https://www.python.org/ftp/python/${PYTHON_VERSION}/Python-${PYTHON_VERSION}.tar.xz && \
     echo "${PYTHON_SHA256}  Python-${PYTHON_VERSION}.tar.xz" | sha256sum -c - && \
     tar -xf Python-${PYTHON_VERSION}.tar.xz && mkdir python-build && cd python-build && \
-    ../Python-${PYTHON_VERSION}/configure --prefix=/opt/python-3.9 --with-ensurepip=install && \
+    ../Python-${PYTHON_VERSION}/configure --prefix=/opt/python-${PYTHON_MM} --with-ensurepip=install && \
     make -j"$(nproc)" && make altinstall && \
-    /opt/python-3.9/bin/python3.9 --version
+    ln -sf "python${PYTHON_MM}" /opt/python-${PYTHON_MM}/bin/python3 && \
+    /opt/python-${PYTHON_MM}/bin/python${PYTHON_MM} --version
 
 FROM ubuntu-snapshot AS gcc-builder
 SHELL ["/bin/bash", "-c"]
@@ -64,13 +66,15 @@ RUN set -euo pipefail && \
 
 FROM ubuntu-snapshot
 SHELL ["/bin/bash", "-c"]
-ARG UBUNTU_IMAGE UBUNTU_SNAPSHOT PYTHON_VERSION GCC_VERSION
+ARG UBUNTU_IMAGE UBUNTU_SNAPSHOT PYTHON_VERSION PYTHON_MM GCC_VERSION
 ARG QUANTLIB_VERSION QUANTLIB_SHA256 JUST_VERSION JUST_SHA256
 ENV TZ=UTC \
     MERTON_BASE_IMAGE=${UBUNTU_IMAGE} \
     UBUNTU_SNAPSHOT=${UBUNTU_SNAPSHOT} \
     JUST_VERSION=${JUST_VERSION} \
     PYTHON_VERSION=${PYTHON_VERSION} \
+    PYTHON_MM=${PYTHON_MM} \
+    PYTHON_BIN=/opt/python-${PYTHON_MM}/bin/python${PYTHON_MM} \
     QUANTLIB_VERSION=${QUANTLIB_VERSION} \
     GCC_VERSION=${GCC_VERSION}
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -78,14 +82,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libboost-all-dev \
       libssl3 zlib1g libbz2-1.0 libreadline8 libsqlite3-0 libffi8 liblzma5 libgdbm6 libncursesw6 libuuid1 && \
     rm -rf /var/lib/apt/lists/*
-COPY --from=python-builder /opt/python-3.9 /opt/python-3.9
+COPY --from=python-builder /opt/python-${PYTHON_MM} /opt/python-${PYTHON_MM}
 COPY --from=gcc-builder /opt/gcc-16 /opt/gcc-16
-ENV PATH="/opt/python-3.9/bin:/opt/gcc-16/bin:$PATH" \
+ENV PATH="/opt/python-${PYTHON_MM}/bin:/opt/gcc-16/bin:$PATH" \
     LD_LIBRARY_PATH="/opt/gcc-16/lib64" \
     CC="/opt/gcc-16/bin/gcc" \
     CXX="/opt/gcc-16/bin/g++"
-COPY requirements-docker.lock /tmp/requirements-docker.lock
-RUN python3.9 -m pip install --no-cache-dir --require-hashes -r /tmp/requirements-docker.lock && \
+COPY requirements-docker.lock.${PYTHON_MM} /tmp/requirements-docker.lock
+RUN python${PYTHON_MM} -m pip install --no-cache-dir --require-hashes -r /tmp/requirements-docker.lock && \
     rm -f /tmp/requirements-docker.lock
 RUN set -euo pipefail && cd /tmp && \
     curl -fsSLO "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz" && \

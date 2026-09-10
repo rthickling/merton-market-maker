@@ -7,6 +7,7 @@
 _merton_cfg="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/.merton-build.env"
 _merton_names=(
   COMPILER
+  PYTHON_VERSION
   MERTON_PYTHON_BINDING
   DOCKER_NETWORK
   IMAGE_NAME

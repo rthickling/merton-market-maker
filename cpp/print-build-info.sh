@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-python_actual="$(python3.9 -c 'import platform; print(platform.python_version())')"
+python_mm="${PYTHON_MM:-${PYTHON_VERSION%.*}}"
+python_bin="${PYTHON_BIN:-/opt/python-${python_mm}/bin/python${python_mm}}"
+python_actual="$("$python_bin" -c 'import platform; print(platform.python_version())')"
 quantlib_actual="$(/opt/ql_install/bin/quantlib-config --version)"
 just_actual="$(just --version | awk '{print $2}')"
 
@@ -31,12 +33,14 @@ else
   exit 1
 fi
 
-python3.9 - <<'PY'
+"$python_bin" - <<'PY'
 from importlib.metadata import version
 expected = {
     "pybind11": "3.0.2",
     "nanobind": "2.12.0",
     "pytest": "8.4.2",
+    "websockets": "15.0.1",
+    "python-dotenv": "1.2.1",
 }
 for package, wanted in expected.items():
     actual = version(package)

@@ -149,6 +149,8 @@ So the runtime loop is:
 - `maybe_update_params` (periodically)
 - `fair_value` (as needed for signal/decision)
 
+The default local demonstration (`just demo` / `scripts/run_binance_demo.py`) runs this loop on Binance public bookTicker data and prints paper quotes. ProfitView remains an optional deployment wrapper around the same runtime.
+
 ### Runtime pseudocode
 
 ```text

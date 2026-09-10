@@ -1,9 +1,13 @@
 import pytest
 
-import merton_online_calibrator as moc
+
+def _moc():
+    import merton_online_calibrator as moc
+    return moc
 
 
-def build_calibrator() -> moc.OnlineMertonCalibrator:
+def build_calibrator():
+    moc = _moc()
     p = moc.MertonParams()
     p.sigma = 0.44
     setattr(p, "lambda", 20.0)
@@ -19,7 +23,7 @@ def build_calibrator() -> moc.OnlineMertonCalibrator:
     return moc.OnlineMertonCalibrator(p, cfg)
 
 
-def feed_ticks(cal: moc.OnlineMertonCalibrator) -> tuple[float, int]:
+def feed_ticks(cal) -> tuple[float, int]:
     ts = 1_700_000_000_000_000  # epoch in microseconds
     price = 68_000.0
     for i in range(200):
@@ -40,7 +44,7 @@ class CalibratorHarness:
     def sample_count(self) -> int:
         return self.cal.sample_count()
 
-    def params(self) -> moc.MertonParams:
+    def params(self):
         return self.cal.params()
 
     def fair_value(self, price: float, q_annual: float, t_years: float, r: float) -> float:

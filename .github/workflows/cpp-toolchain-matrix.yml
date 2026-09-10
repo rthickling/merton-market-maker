@@ -39,6 +39,7 @@ jobs:
         working-directory: cpp
         env:
           COMPILER: ${{ matrix.compiler }}
+          PYTHON_VERSION: 3.12.11
           DOCKER_NETWORK: bridge
         run: just docker-build-clean
 
@@ -46,6 +47,7 @@ jobs:
         working-directory: cpp
         env:
           COMPILER: ${{ matrix.compiler }}
+          PYTHON_VERSION: 3.12.11
           DOCKER_NETWORK: bridge
         run: |
           just versions
@@ -55,5 +57,46 @@ jobs:
         working-directory: cpp
         env:
           COMPILER: ${{ matrix.compiler }}
+          PYTHON_VERSION: 3.12.11
           DOCKER_NETWORK: bridge
         run: just test-compiler-matrix
+
+  gcc-nanobind-python313:
+    name: gcc / nanobind / CPython 3.13
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0 (Node.js 24)
+
+      - name: Install pinned just
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=1.58.0
+          archive="just-${version}-x86_64-unknown-linux-musl.tar.gz"
+          curl -fsSLO "https://github.com/casey/just/releases/download/${version}/${archive}"
+          echo "4a5cc2f53e6f0f8c59092a6cc38291eb729d46a7dd95d3ae582008881b84931d  ${archive}" | sha256sum -c -
+          sudo tar -xzf "${archive}" -C /usr/local/bin just
+          just --version
+
+      - name: Clean-build GCC image with CPython 3.13
+        working-directory: cpp
+        env:
+          COMPILER: gcc
+          MERTON_PYTHON_BINDING: nanobind
+          PYTHON_VERSION: 3.13.7
+          DOCKER_NETWORK: bridge
+        run: just docker-build-clean
+
+      - name: Probe and test nanobind on 3.13
+        working-directory: cpp
+        env:
+          COMPILER: gcc
+          MERTON_PYTHON_BINDING: nanobind
+          PYTHON_VERSION: 3.13.7
+          DOCKER_NETWORK: bridge
+        run: |
+          just versions
+          just probe
+          just test-host

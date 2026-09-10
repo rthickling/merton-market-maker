@@ -127,7 +127,7 @@ endif()
 # --- nanobind (requires FindPython-style Python::Module) ---
 if(MERTON_PYTHON_BINDING STREQUAL "nanobind")
     set(Python_EXECUTABLE "${Python3_EXECUTABLE}")
-    find_package(Python 3.9 REQUIRED COMPONENTS Interpreter Development)
+    find_package(Python REQUIRED COMPONENTS Interpreter Development)
 
     execute_process(
         COMMAND "${Python3_EXECUTABLE}" -c "import nanobind; print(nanobind.cmake_dir())"

@@ -12,9 +12,10 @@ This folder contains the heavy runtime path in C++ and a reflection-based Python
   - rolling return ingestion from ticks
   - Merton jump-diffusion negative log-likelihood over a rolling window
   - periodic online parameter improvement (`sigma`, `lambda`, `mu_j`, `delta_j`)
-- Fair-value computation:
-  - `E[S_T] = S_0 * exp((r - q - lambda * k) * T)`
-  - `k = exp(mu_j + 0.5 * delta_j^2) - 1`
+- Fair-value computation (as implemented; see section 4):
+  - `S_0 * exp((r - q - lambda * k) * T)` with `k = exp(mu_j + 0.5 * delta_j^2) - 1`
+  - This is the mean along the no-jump path. Under the compensated Merton SDE,
+    the unconditional expectation is `S_0 * exp((r - q) * T)`.
 
 The heavy likelihood path uses an internal standard-normal density implementation to keep the core portable in minimal build environments.
 
@@ -48,30 +49,35 @@ Both backends expose the same Python-facing API and the same reflected public me
 
 ## Binding Surface
 
-Both binding backends emit the plain extension filename `merton_online_calibrator.so` and expose the following API:
+Both binding backends emit the plain extension filename `merton_online_calibrator.so`. Classes and constructors are registered by hand. Public data members and public instance methods of those classes are bound by the reflection headers, including parameter names. C++ default arguments are not exposed as Python defaults.
 
-- constructor: `OnlineMertonCalibrator(MertonParams initial, CalibratorConfig config={})`
-- `bool update_tick(double price, int64_t epoch_us)`
-- `bool maybe_update_params()`
-- `double fair_value(double s0, double q_annual, double t_years, double r=0.0) const`
-- `double fair_value_quantlib(double s0, double q_annual, double t_years, double r=0.0) const`
-- `MertonParams params() const`
-- `size_t sample_count() const`
+Python signatures, as actually exposed:
 
-All data members and public instance methods are bound through the reflection headers, with no hand-written per-member or per-method mappings. Note that Python access to the `lambda` field uses `getattr(obj, "lambda")` / `setattr(obj, "lambda", v)` because `lambda` is a Python keyword.
+- `OnlineMertonCalibrator(initial, config=CalibratorConfig())`
+- `update_tick(price, epoch_us)`
+- `maybe_update_params()`
+- `fair_value(s0, q_annual, t_years, r)` — `r` is required; the C++ default `r = 0.0` is not a Python default
+- `fair_value_quantlib(s0, q_annual, t_years, r)` — same
+- `params()` — returns a copy of the current `MertonParams` (a snapshot; changing the copy does not change the calibrator)
+- `sample_count()`
+- `calibration_count()`
+
+`MertonParams` fields are `sigma`, `lambda_`, `mu_j` and `delta_j`. `lambda_` is the Python name for the C++ member `lambda`. A second property, `lambda`, is an alias reachable with `getattr` and `setattr`, because `lambda` is a Python keyword. Getters return copies of the scalar values; setters write the scalar back.
+
+Each call holds the GIL. The calibrator object is mutable and is not safe to share across threads without external synchronisation.
 
 Python usage pattern:
 
 1. On each tick: `update_tick(price, ts_us)`
 2. Every N returns: `maybe_update_params()`
-3. For quote comparison: `fair_value(mid, q_annual, T_years, r)`
+3. For quote comparison: `fair_value(mid, q_annual, T_years, r)` with `r` passed explicitly
 4. Periodically pull `params()` for logging / persistence
 
 QuantLib integration (for illustration purposes):
 
 - `fair_value_quantlib(...)` builds flat `r`/`q` curves with QuantLib
 - computes forward from discount factors (`S0 * Dq / Dr`)
-- applies the Merton jump compensator adjustment using current online parameters
+- applies the same `-λκ` adjustment as `fair_value`, after day-rounding the horizon
 
 ## How `OnlineMertonCalibrator` Works
 
@@ -135,13 +141,27 @@ with $\widehat{\Delta t}$ taken as the median of observed inter-tick intervals (
 
 ### 4) Fair value from current online parameters
 
-At any point, fair value uses the current online parameters:
+At any point, `fair_value` uses the current online parameters and returns
 
 $$
-\mathbb{E}[S_T \mid S_0] = S_0 \, \exp\bigl((r - q - \lambda\kappa)\,T\bigr),
+S_0 \, \exp\bigl((r - q - \lambda\kappa)\,T\bigr),
 \quad
-\kappa = e^{\mu_J + \delta_J^2/2} - 1
+\kappa = e^{\mu_J + \delta_J^2/2} - 1.
 $$
+
+The documented process is the compensated Merton SDE,
+`dS/S = (r - q - λκ)dt + σ dW + (J-1)dN`. Under that SDE the unconditional
+mean is `S_0 exp((r - q)T)`, because the jump contribution cancels the
+compensator in expectation. The implemented formula keeps `-λκ` in the drift,
+so it equals the mean along the no-jump path
+`E[S_T | N_T = 0]` (diffusion only). The difference is about 0.56 bp over an
+8-hour horizon at the default parameters, and can reach a few percent at the
+parameter clamps. This labeling matches the code; the formula is intentionally
+unchanged.
+
+`fair_value_quantlib` aims at the same quantity via flat QuantLib curves, but
+rounds the horizon to a whole number of days (minimum one), which creates a
+small systematic gap on sub-day horizons.
 
 So the runtime loop is:
 
@@ -149,7 +169,9 @@ So the runtime loop is:
 - `maybe_update_params` (periodically)
 - `fair_value` (as needed for signal/decision)
 
-The default local demonstration (`just demo` / `scripts/run_binance_demo.py`) runs this loop on Binance public bookTicker data and prints paper quotes. ProfitView remains an optional deployment wrapper around the same runtime.
+The default local demonstration (`just demo` / `scripts/run_binance_demo.py`) runs this loop on Binance public bookTicker data and prints paper quotes. It places no orders.
+
+`profitview_merton_signal.py` is a historical wrapper from an earlier BitMEX deployment. That market is no longer the supported path; use the Binance demo or `just replay` for a current offline run.
 
 ### Runtime pseudocode
 
@@ -167,7 +189,7 @@ for each market tick (price, ts_us):
 
     q_annual = funding_to_annual(funding_rate, interval_hours)  # Binance: live 8h/4h/1h
     T_years = interval_hours / (365.25 * 24)
-    fair = calibrator.fair_value(price_or_mid, q_annual, T_years, r=0.0)
+    fair = calibrator.fair_value(price_or_mid, q_annual, T_years, 0.0)  # r is required in Python
     diff = fair - market_price
     # publish signal / apply strategy logic
 ```
@@ -179,4 +201,4 @@ for each market tick (price, ts_us):
 - QuantLib test suite: [jumpdiffusion.cpp](https://github.com/lballabio/QuantLib/blob/master/test-suite/jumpdiffusion.cpp)
 - [Merton-Jump-Diffusion-CPP](https://github.com/QGoGithub/Merton-Jump-Diffusion-CPP) (standalone MIT implementation)
 - [QuantStart: Jump-diffusion models for European options in C++](https://www.quantstart.com/articles/Jump-Diffusion-Models-for-European-Options-Pricing-in-C/)
-- [nanobind: tiny and efficient C++/Python bindings](https://github.com/wjakob/nanobind)
+- [nanobind](https://github.com/wjakob/nanobind) and [pybind11](https://github.com/pybind/pybind11)

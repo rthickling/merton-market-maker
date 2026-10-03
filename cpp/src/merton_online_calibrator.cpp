@@ -14,7 +14,9 @@
 // Flow:
 //   1. update_tick(price, ts_us): ingest ticks, compute log returns, roll buffer
 //   2. maybe_update_params(): gated MLE coordinate search over rolling returns
-//   3. fair_value(s0, q, T, r): E[S_T] = S0 * exp((r - q - lambda*k)*T)
+//   3. fair_value(s0, q, T, r): S0 * exp((r - q - lambda*k)*T)
+//      Under the compensated SDE above, unconditional E[S_T] = S0*exp((r-q)*T).
+//      fair_value keeps the -lambda*k term (mean along the no-jump path).
 // -----------------------------------------------------------------------------
 
 #include "merton_online_calibrator.hpp"
@@ -231,8 +233,10 @@ bool OnlineMertonCalibrator::maybe_update_params() {
 // Fair value (analytic)
 // -----------------------------------------------------------------------------
 //
-// E[S_T] = S0 * exp((r - q - lambda*k)*T)
-// with k = jump_compensator(mu_j, delta_j). No QuantLib in hot path.
+// Returns S0 * exp((r - q - lambda*k)*T) with k = jump_compensator(mu_j, delta_j).
+// That keeps the compensator in the drift: it is the mean along the no-jump path,
+// not the unconditional E[S_T] = S0*exp((r-q)*T) implied by the SDE above.
+// No QuantLib in the hot path.
 // -----------------------------------------------------------------------------
 
 double OnlineMertonCalibrator::fair_value(double s0, double q_annual, double t_years, double r) const {
@@ -245,9 +249,10 @@ double OnlineMertonCalibrator::fair_value(double s0, double q_annual, double t_y
 // Fair value (QuantLib-based helper)
 // -----------------------------------------------------------------------------
 //
-// Uses flat r/q curves and F = S0 * Dq(T)/Dr(T), then applies Merton jump
-// adjustment: F * exp(-lambda*k*T). Used for validation or when curve objects
-// are needed; not used in the hot path.
+// Same quantity as fair_value, via flat r/q curves: F = S0 * Dq(T)/Dr(T), then
+// F * exp(-lambda*k*T). The maturity is rounded to a whole number of days
+// (minimum one), so short horizons disagree slightly with fair_value.
+// Used for validation or when curve objects are needed; not on the hot path.
 // -----------------------------------------------------------------------------
 
 double OnlineMertonCalibrator::fair_value_quantlib(double s0, double q_annual, double t_years, double r) const {

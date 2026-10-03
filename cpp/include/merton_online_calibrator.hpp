@@ -33,9 +33,9 @@ public:
     // Returns true if parameters were updated.
     bool maybe_update_params();
 
-    // Compute fair value E[S_T] for horizon T (years).
+    // S0*exp((r - q - λκ)T), κ = exp(μ_J + δ_J²/2) - 1. Not the unconditional E[S_T].
     double fair_value(double s0, double q_annual, double t_years, double r = 0.0) const;
-    // QuantLib-based helper using discount curves/day count for carry forward.
+    // Same quantity via QuantLib flat curves (day-rounded horizon; see THEORY.md).
     double fair_value_quantlib(double s0, double q_annual, double t_years, double r = 0.0) const;
 
     const MertonParams& params() const { return params_; }

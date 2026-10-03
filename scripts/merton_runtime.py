@@ -43,7 +43,7 @@ def merton_theoretical(
     T_years: float,
     r: float = 0.0,
 ) -> float:
-    """E[S_T] = S_0 * exp((r - q - λk) * T), k = exp(μ_J + δ_J²/2) - 1"""
+    """S0*exp((r - q - λk)*T), k = exp(μ_J + δ_J²/2) - 1; same as OnlineMertonCalibrator.fair_value."""
     k = math.exp(mu_j + 0.5 * delta_j**2) - 1
     drift = r - q_annual - lam * k
     return S0 * math.exp(drift * T_years)

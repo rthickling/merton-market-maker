@@ -17,7 +17,7 @@ cd merton-market-maker/cpp
 just test
 ```
 
-This builds the default GCC 16.2 / nanobind / CPython 3.12 environment, compiles `merton_online_calibrator.so`, imports it, and runs `cpp/tests/`. All compiler, Python, QuantLib, binding, and test dependencies are installed inside the pinned Docker image.
+This builds the default GCC 16.2 / nanobind / CPython 3.14 environment, compiles `merton_online_calibrator.so`, imports it, and runs `cpp/tests/`. All compiler, Python, QuantLib, binding, and test dependencies are installed inside the pinned Docker image.
 
 To demonstrate the calibrator on live public market data (no ProfitView):
 
@@ -53,11 +53,10 @@ Supported bindings:
 - `MERTON_PYTHON_BINDING=nanobind` (default)
 - `MERTON_PYTHON_BINDING=pybind11`
 
-Supported CPython versions (`PYTHON_VERSION`; aliases `3.9`, `3.12`, `3.13` work):
+Supported CPython versions (`PYTHON_VERSION`; aliases `3.14` and `3.13` work):
 
-- `3.12.11` (default local demo and CI)
-- `3.13.7` (recent)
-- `3.9.25` (ProfitView module ABI)
+- `3.14.8` (default local demo and CI)
+- `3.13.16` (previous stable release)
 
 Examples:
 
@@ -65,7 +64,6 @@ Examples:
 just test
 just demo
 PYTHON_VERSION=3.13 just test
-PYTHON_VERSION=3.9.25 COMPILER=gcc just test
 COMPILER=clang just test
 COMPILER=clang MERTON_PYTHON_BINDING=pybind11 just test
 ```
@@ -73,6 +71,26 @@ COMPILER=clang MERTON_PYTHON_BINDING=pybind11 just test
 Command-line environment values override saved values in `.merton-build.env`. Run `just setup-defaults` for interactive local defaults or copy `.merton-build.env.example`.
 
 Use `DOCKER_NETWORK=bridge` in CI or environments without Docker host networking.
+
+## First-time setup and day-to-day commands
+
+First-time setup needs a network connection. It builds the selected image (compiler, CPython, QuantLib, binding libraries) and is the slow step:
+
+```bash
+just docker-build           # or `just test`, which builds the image if it is missing
+just versions               # print the pinned versions from the image
+```
+
+After the image exists, day-to-day commands keep it. `just rebuild`, `just api`, `just replay` and `just bench` run the container with the network disabled.
+
+```bash
+just rebuild                # incremental compile of the selected combination
+just api                    # print the reflected Python interface
+just replay                 # replay synthetic ticks, or recorded ticks from MERTON_MARKET_MAKER_DATA_PATH
+just bench                  # agreement checks, then timings (nanobind only)
+just test                   # clean build and pytest (may reuse the image)
+just demo                   # live Binance quotes; needs the network
+```
 
 ## Commands
 
@@ -82,9 +100,15 @@ just versions               # validate and print pinned versions from the image
 just probe                  # compile and run the reflection feature probe
 just docker-build-clean     # rebuild the selected image with --pull --no-cache
 just demo                   # build then stream Binance quotes into the calibrator
+just build                  # clean build of the selected combination (deletes its build directory first)
+just rebuild                # incremental build: keeps the build directory, recompiles only what changed
+just api                    # incremental build, then print the module's Python interface
+just replay                 # incremental build, then replay synthetic (or recorded) ticks offline
+just bench                  # time the Python reference against reflected and hand-written nanobind bindings
 just test                   # build and test the selected combination (may reuse image cache)
 just test-compiler-matrix   # test both bindings with the selected compiler (may reuse image cache)
 just test-matrix            # test all four compiler/binding combinations (may reuse image cache)
+just test-manual-bindings   # also build the hand-written nanobind module and check it matches
 ```
 
 Build and test commands do not copy modules to deployment locations.
@@ -94,24 +118,26 @@ Build and test commands do not copy modules to deployment locations.
 Each compiler/binding/Python combination has an independent directory:
 
 ```text
-cpp/build/gcc-16-nanobind-py3.12/merton_online_calibrator.so
-cpp/build/gcc-16-pybind11-py3.12/merton_online_calibrator.so
-cpp/build/clang-p2996-nanobind-py3.12/merton_online_calibrator.so
-cpp/build/gcc-16-nanobind-py3.9/merton_online_calibrator.so
+cpp/build/gcc-16-nanobind-py3.14/merton_online_calibrator.so
+cpp/build/gcc-16-pybind11-py3.14/merton_online_calibrator.so
+cpp/build/clang-p2996-nanobind-py3.14/merton_online_calibrator.so
+cpp/build/gcc-16-nanobind-py3.13/merton_online_calibrator.so
 ```
 
 Both binding backends deliberately emit the same plain module filename. Tests set `PYTHONPATH` to the selected directory.
+
+`just test-manual-bindings` builds into `<combination>-with-manual` (for example `cpp/build/gcc-16-nanobind-py3.14-with-manual/`), which also contains `merton_manual_bindings.so`. That module is written by hand with nanobind but makes the same binding choices as the reflected one, so it can serve as a like-for-like baseline when measuring binding cost; `tests/test_manual_bindings.py` checks that the two expose the same interface and return the same results. It is built only when the CMake option `MERTON_BUILD_MANUAL_BINDINGS=ON` is set, which requires nanobind.
 
 ## Explicit deployment copy
 
 Set `MODULE_DEST_DIR`, build the desired combination, and copy it explicitly:
 
 ```bash
-PYTHON_VERSION=3.9.25 COMPILER=gcc MERTON_PYTHON_BINDING=nanobind just test
-MODULE_DEST_DIR=/path/to/runtime PYTHON_VERSION=3.9.25 COMPILER=gcc MERTON_PYTHON_BINDING=nanobind just copy-module
+PYTHON_VERSION=3.14.8 COMPILER=gcc MERTON_PYTHON_BINDING=nanobind just test
+MODULE_DEST_DIR=/path/to/runtime PYTHON_VERSION=3.14.8 COMPILER=gcc MERTON_PYTHON_BINDING=nanobind just copy-module
 ```
 
-ProfitView needs the 3.9 ABI. Local demo uses 3.12 by default and does not copy the module.
+Local demo and tests use 3.14 by default and do not copy the module.
 
 No build or test recipe performs deployment copying.
 
@@ -120,7 +146,7 @@ No build or test recipe performs deployment copying.
 The Dockerfiles pin:
 
 - Ubuntu 22.04 `linux/amd64` base image by digest and Ubuntu packages by snapshot
-- CPython 3.12.11 (default), 3.13.7, or 3.9.25 source by SHA-256
+- CPython 3.14.8 (default) or 3.13.16 source by SHA-256
 - Bloomberg Clang P2996 by tested commit, or GCC 16.2 source by official SHA-512
 - QuantLib 1.33 and just 1.58.0 by SHA-256
 - all Python build/test packages and transitive dependencies by wheel hash
@@ -129,4 +155,4 @@ The Dockerfiles pin:
 
 ## CI
 
-`.github/workflows/cpp-toolchain-matrix.yml` runs `just docker-build-clean` for each compiler on the default Python 3.12 (so images build with `--pull --no-cache`), then the reflection probe and both binding backends. A separate job clean-builds GCC/nanobind on CPython 3.13. Local `just test-matrix` alone does not disable Docker caching.
+`.github/workflows/cpp-toolchain-matrix.yml` runs `just docker-build-clean` for each compiler on the default Python 3.14 (so images build with `--pull --no-cache`), then the reflection probe and both binding backends. A separate job clean-builds GCC/nanobind on CPython 3.13. Local `just test-matrix` alone does not disable Docker caching.

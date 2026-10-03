@@ -8,6 +8,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(MERTON_PYTHON_BINDING "pybind11" CACHE STRING "Python binding backend: pybind11 or nanobind")
 set_property(CACHE MERTON_PYTHON_BINDING PROPERTY STRINGS pybind11 nanobind)
+option(MERTON_BUILD_MANUAL_BINDINGS
+    "Also build merton_manual_bindings, hand-written nanobind bindings for comparison" OFF)
 
 set(MERTON_CORE_SOURCES
     src/merton_online_calibrator.cpp
@@ -66,6 +68,9 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter Development)
 if(NOT MERTON_PYTHON_BINDING STREQUAL "pybind11" AND NOT MERTON_PYTHON_BINDING STREQUAL "nanobind")
     message(FATAL_ERROR
         "MERTON_PYTHON_BINDING must be 'pybind11' or 'nanobind' (got '${MERTON_PYTHON_BINDING}')")
+endif()
+if(MERTON_BUILD_MANUAL_BINDINGS AND NOT MERTON_PYTHON_BINDING STREQUAL "nanobind")
+    message(FATAL_ERROR "MERTON_BUILD_MANUAL_BINDINGS requires MERTON_PYTHON_BINDING=nanobind")
 endif()
 
 # --- pybind11 ---
@@ -160,6 +165,28 @@ if(MERTON_PYTHON_BINDING STREQUAL "nanobind")
         OUTPUT_NAME "merton_online_calibrator"
         SUFFIX ".so"
     )
+
+    if(MERTON_BUILD_MANUAL_BINDINGS)
+        # Its own nanobind domain keeps its types separate from the reflected
+        # module's when both are imported into one process.
+        nanobind_add_module(merton_manual_bindings NOMINSIZE NB_STATIC NB_DOMAIN merton_manual
+            src/manual_bindings_nanobind.cpp
+        )
+        target_include_directories(merton_manual_bindings
+            PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR}/include
+        )
+        target_link_libraries(merton_manual_bindings
+            PRIVATE
+                merton_core
+                Python::Module
+        )
+        set_target_properties(merton_manual_bindings PROPERTIES
+            PREFIX ""
+            OUTPUT_NAME "merton_manual_bindings"
+            SUFFIX ".so"
+        )
+    endif()
 endif()
 
 # Reflection defaults for portability when no external toolchain vars are provided.
@@ -186,11 +213,18 @@ if(NOT DEFINED REFLECT_PY_STRAT_INCLUDE_DIRS)
     )
 endif()
 
+set(MERTON_PYTHON_MODULES merton_online_calibrator)
+if(TARGET merton_manual_bindings)
+    list(APPEND MERTON_PYTHON_MODULES merton_manual_bindings)
+endif()
+
 target_compile_options(merton_core PRIVATE ${REFLECT_PY_STRAT_CXX_FLAGS})
-target_compile_options(merton_online_calibrator PRIVATE ${REFLECT_PY_STRAT_CXX_FLAGS})
-target_link_options(merton_online_calibrator PRIVATE ${REFLECT_PY_STRAT_LINK_FLAGS})
 target_include_directories(merton_core PRIVATE ${REFLECT_PY_STRAT_INCLUDE_DIRS})
-target_include_directories(merton_online_calibrator PRIVATE ${REFLECT_PY_STRAT_INCLUDE_DIRS})
+foreach(module IN LISTS MERTON_PYTHON_MODULES)
+    target_compile_options(${module} PRIVATE ${REFLECT_PY_STRAT_CXX_FLAGS})
+    target_link_options(${module} PRIVATE ${REFLECT_PY_STRAT_LINK_FLAGS})
+    target_include_directories(${module} PRIVATE ${REFLECT_PY_STRAT_INCLUDE_DIRS})
+endforeach()
 
 # nanobind builds a support library (`nanobind-static`) that must use the same
 # stdlib/toolchain settings as the reflection-based extension. Otherwise the
@@ -201,15 +235,17 @@ if(MERTON_PYTHON_BINDING STREQUAL "nanobind" AND TARGET nanobind-static)
 endif()
 
 # Explicit runtime linkage for portable extension loading.
-target_link_libraries(merton_online_calibrator PRIVATE
-    m c dl pthread gcc_s
-)
-if(DEFINED REFLECT_PY_STRAT_LIBCXX AND EXISTS "${REFLECT_PY_STRAT_LIBCXX}")
-    target_link_libraries(merton_online_calibrator PRIVATE "${REFLECT_PY_STRAT_LIBCXX}")
-endif()
-if(DEFINED REFLECT_PY_STRAT_LIBCXXABI AND EXISTS "${REFLECT_PY_STRAT_LIBCXXABI}")
-    target_link_libraries(merton_online_calibrator PRIVATE "${REFLECT_PY_STRAT_LIBCXXABI}")
-endif()
+foreach(module IN LISTS MERTON_PYTHON_MODULES)
+    target_link_libraries(${module} PRIVATE
+        m c dl pthread gcc_s
+    )
+    if(DEFINED REFLECT_PY_STRAT_LIBCXX AND EXISTS "${REFLECT_PY_STRAT_LIBCXX}")
+        target_link_libraries(${module} PRIVATE "${REFLECT_PY_STRAT_LIBCXX}")
+    endif()
+    if(DEFINED REFLECT_PY_STRAT_LIBCXXABI AND EXISTS "${REFLECT_PY_STRAT_LIBCXXABI}")
+        target_link_libraries(${module} PRIVATE "${REFLECT_PY_STRAT_LIBCXXABI}")
+    endif()
+endforeach()
 
 
 message(STATUS "Merton Python binding: ${MERTON_PYTHON_BINDING}")

@@ -61,6 +61,15 @@ jobs:
           DOCKER_NETWORK: bridge
         run: just test-compiler-matrix
 
+      - name: Check hand-written nanobind bindings match the reflected ones
+        working-directory: cpp
+        env:
+          COMPILER: ${{ matrix.compiler }}
+          PYTHON_VERSION: 3.14.8
+          MERTON_PYTHON_BINDING: nanobind
+          DOCKER_NETWORK: bridge
+        run: just test-manual-bindings
+
   gcc-nanobind-python313:
     name: gcc / nanobind / CPython 3.13
     runs-on: ubuntu-24.04

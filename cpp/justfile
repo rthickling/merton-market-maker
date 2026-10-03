@@ -6,7 +6,7 @@ root := justfile_directory()
 default:
   @just test
 
-# Shared env: COMPILER=clang|gcc (default gcc), PYTHON_VERSION=3.9.25|3.12.11|3.13.7 (default 3.12.11).
+# Shared env: COMPILER=clang|gcc (default gcc), PYTHON_VERSION=3.14.8|3.13.16 (default 3.14.8).
 # Demo perps: MERTON_SYMBOL=BTCUSDT|ETHUSDT|SOLUSDT|XRPUSDT|XAUUSDT
 # Effective build dir: build/<compiler_tag>-<binding>-py<major.minor>
 
@@ -44,16 +44,15 @@ setup-defaults:
 
   echo
   echo "2) CPython version (PYTHON_VERSION)"
-  echo "   - 3.12.11: default local/CI demo"
-  echo "   - 3.13.7: recent"
-  echo "   - 3.9.25: ProfitView ABI"
+  echo "   - 3.14.8: default local/CI demo"
+  echo "   - 3.13.16: previous stable release"
   while :; do
-    printf "   Python [3.12.11]: "
+    printf "   Python [3.14.8]: "
     read -r pyver
-    pyver=${pyver:-3.12.11}
+    pyver=${pyver:-3.14.8}
     case "$pyver" in
-      3.9|3.9.25|3.12|3.12.11|3.13|3.13.7) break ;;
-      *) echo "   Please enter 3.9.25, 3.12.11, or 3.13.7." ;;
+      3.14|3.14.8|3.13|3.13.16) break ;;
+      *) echo "   Please enter 3.14.8 or 3.13.16." ;;
     esac
   done
 

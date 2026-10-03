@@ -5,7 +5,7 @@ Preferred local demo (no ProfitView):
   cd cpp && just demo
 
 To deploy here:
-1. Build a Python 3.9 module (`PYTHON_VERSION=3.9.25 just test`) and `just copy-module`.
+1. Build a module (`just test`) and `just copy-module`.
 2. Paste this file into ProfitView's Trading Bots editor (scripts/ must be importable).
 3. Subscribe to XBTUSDT and create a BitMEX Market Maker bot.
 """

@@ -1,4 +1,4 @@
-# Fully resolved for CPython 3.12 on linux/amd64.
+# Fully resolved for CPython 3.13 on linux/amd64.
 iniconfig==2.1.0 \
     --hash=sha256:9deba5723312380e77435581c6bf4935c94cbfab9b1ed33ef8d238ea168eb760
 nanobind==2.12.0 \

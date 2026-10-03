@@ -39,7 +39,7 @@ jobs:
         working-directory: cpp
         env:
           COMPILER: ${{ matrix.compiler }}
-          PYTHON_VERSION: 3.12.11
+          PYTHON_VERSION: 3.14.8
           DOCKER_NETWORK: bridge
         run: just docker-build-clean
 
@@ -47,7 +47,7 @@ jobs:
         working-directory: cpp
         env:
           COMPILER: ${{ matrix.compiler }}
-          PYTHON_VERSION: 3.12.11
+          PYTHON_VERSION: 3.14.8
           DOCKER_NETWORK: bridge
         run: |
           just versions
@@ -57,7 +57,7 @@ jobs:
         working-directory: cpp
         env:
           COMPILER: ${{ matrix.compiler }}
-          PYTHON_VERSION: 3.12.11
+          PYTHON_VERSION: 3.14.8
           DOCKER_NETWORK: bridge
         run: just test-compiler-matrix
 
@@ -85,7 +85,7 @@ jobs:
         env:
           COMPILER: gcc
           MERTON_PYTHON_BINDING: nanobind
-          PYTHON_VERSION: 3.13.7
+          PYTHON_VERSION: 3.13.16
           DOCKER_NETWORK: bridge
         run: just docker-build-clean
 
@@ -94,7 +94,7 @@ jobs:
         env:
           COMPILER: gcc
           MERTON_PYTHON_BINDING: nanobind
-          PYTHON_VERSION: 3.13.7
+          PYTHON_VERSION: 3.13.16
           DOCKER_NETWORK: bridge
         run: |
           just versions

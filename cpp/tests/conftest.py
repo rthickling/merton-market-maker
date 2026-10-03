@@ -6,7 +6,7 @@ def _moc():
     return moc
 
 
-def build_calibrator():
+def build_calibrator(**config_overrides):
     moc = _moc()
     p = moc.MertonParams()
     p.sigma = 0.44
@@ -20,6 +20,8 @@ def build_calibrator():
     cfg.update_every_n_returns = 32
     cfg.n_max = 10
     cfg.coordinate_steps = 2
+    for name, value in config_overrides.items():
+        setattr(cfg, name, value)
     return moc.OnlineMertonCalibrator(p, cfg)
 
 
@@ -59,3 +61,8 @@ class CalibratorHarness:
 @pytest.fixture
 def calibrator() -> CalibratorHarness:
     return CalibratorHarness()
+
+
+@pytest.fixture
+def make_calibrator():
+    return build_calibrator

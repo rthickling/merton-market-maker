@@ -150,7 +150,8 @@ bool OnlineMertonCalibrator::update_tick(double price, std::int64_t epoch_us) {
 // Step sizes: 8% of sigma, 10% of lambda, 25% of |mu_j|, 20% of delta_j,
 // with floors to avoid degenerate steps.
 //
-// Returns true iff any parameter actually changed.
+// Returns true iff any parameter actually changed. calibration_count() counts
+// the runs that get past the gate, including those that change nothing.
 // -----------------------------------------------------------------------------
 
 bool OnlineMertonCalibrator::maybe_update_params() {
@@ -166,6 +167,7 @@ bool OnlineMertonCalibrator::maybe_update_params() {
     if (!(dt > 0.0)) {
         return false;
     }
+    ++calibration_count_;
 
     MertonParams best = params_;
     double best_nll = neg_log_likelihood(best, dt);

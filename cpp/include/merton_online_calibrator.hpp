@@ -40,6 +40,8 @@ public:
 
     const MertonParams& params() const { return params_; }
     std::size_t sample_count() const { return returns_.size(); }
+    // Calibrations that ran (the gate was open), whether or not parameters changed.
+    std::size_t calibration_count() const { return calibration_count_; }
 
 private:
     double merton_pdf(double x, const MertonParams& p, double dt_years) const;
@@ -55,6 +57,7 @@ private:
     std::deque<double> returns_;
     std::deque<std::int64_t> dt_us_;
     std::size_t returns_since_last_update_ = 0;
+    std::size_t calibration_count_ = 0;
 };
 
 }  // namespace merton

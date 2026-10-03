@@ -1,8 +1,11 @@
-// Minimal probe of reflection constructs used by include/reflection_bind_*.hpp
-// and include/reflection_accessors.hpp. Compile with Clang P2996 or GCC 16+.
+// Minimal probe of reflection constructs used by include/reflection_bind_*.hpp,
+// include/reflection_accessors.hpp and include/reflection_policy.hpp.
+// Compile with Clang P2996 or GCC 16+.
 #include <meta>
 #include <cstdio>
 #include <string_view>
+
+#include "../include/reflection_policy.hpp"
 
 struct ProbeParams {
     double sigma = 0.44;
@@ -20,8 +23,19 @@ struct Accessor {
 struct ProbeCalibrator {
     double value = 0.0;
     double scale() const { return value * 2.0; }
+    double shifted(double offset, double lambda = 0.5) const { return value + offset + lambda; }
     static int version() { return 1; }
 };
+
+// parameters_of + parameter names + defaults + keyword aliases (reflection_policy.hpp)
+constexpr auto probe_shifted = ^^ProbeCalibrator::shifted;
+static_assert(reflection_policy::named_parameter_count<probe_shifted> == 2);
+static_assert(std::string_view(reflection_policy::parameter_name<probe_shifted, 0>) == "offset");
+static_assert(std::string_view(reflection_policy::parameter_name<probe_shifted, 1>) == "lambda_");
+static_assert(!std::meta::has_default_argument(reflection_policy::parameters<probe_shifted>[0]));
+static_assert(std::meta::has_default_argument(reflection_policy::parameters<probe_shifted>[1]));
+static_assert(std::string_view(reflection_policy::python_name(^^ProbeParams::lambda)) == "lambda_");
+static_assert(std::string_view(reflection_policy::python_name(^^ProbeParams::sigma)) == "sigma");
 
 int main() {
     // define_static_array + nonstatic_data_members_of + template for + splices
@@ -45,15 +59,7 @@ int main() {
     ProbeCalibrator cal{};
     cal.value = 3.0;
     template for (constexpr auto m : fns) {
-        if constexpr (
-            std::meta::is_public(m) &&
-            std::meta::is_function(m) &&
-            !std::meta::is_constructor(m) &&
-            !std::meta::is_destructor(m) &&
-            !std::meta::is_conversion_function(m) &&
-            !std::meta::is_operator_function(m) &&
-            std::meta::has_identifier(m)
-        ) {
+        if constexpr (reflection_policy::is_bindable_method(m)) {
             constexpr auto name = std::meta::identifier_of(m);
             if constexpr (std::meta::is_static_member(m)) {
                 std::printf("static method %s -> %d\n", name.data(), ([:m:])());
@@ -63,7 +69,13 @@ int main() {
         }
     }
 
+    // A call through a splice applies the C++ default argument.
+    const double shifted = cal.[:probe_shifted:](1.0);
+    std::printf("parameters %s, %s; shifted(1.0) -> %f\n",
+                reflection_policy::parameter_name<probe_shifted, 0>,
+                reflection_policy::parameter_name<probe_shifted, 1>, shifted);
+
     std::printf("sum0=%f sigma=%f lambda=%f type=%s\n",
                 sum, p.sigma, p.lambda, std::meta::identifier_of(^^ProbeParams).data());
-    return (sum > 0.0 && p.sigma == 1.44 && p.lambda == 21.0) ? 0 : 1;
+    return (sum > 0.0 && p.sigma == 1.44 && p.lambda == 21.0 && shifted == 4.5) ? 0 : 1;
 }

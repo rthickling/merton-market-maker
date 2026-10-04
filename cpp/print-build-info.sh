@@ -41,6 +41,8 @@ expected = {
     "pytest": "8.4.2",
     "websockets": "15.0.1",
     "python-dotenv": "1.2.1",
+    "numba": "0.68.0",
+    "numpy": "2.5.3",
 }
 for package, wanted in expected.items():
     actual = version(package)

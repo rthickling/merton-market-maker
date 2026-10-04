@@ -74,7 +74,7 @@ Use `DOCKER_NETWORK=bridge` in CI or environments without Docker host networking
 
 ## First-time setup and day-to-day commands
 
-First-time setup needs a network connection. It builds the selected image (compiler, CPython, QuantLib, binding libraries) and is the slow step:
+First-time setup needs a network connection. It builds the selected image (compiler, CPython, QuantLib, binding libraries, Numba) and is the slow step:
 
 ```bash
 just docker-build           # or `just test`, which builds the image if it is missing
@@ -111,7 +111,7 @@ just build                  # clean build of the selected combination (deletes i
 just rebuild                # incremental build: keeps the build directory, recompiles only what changed
 just api                    # incremental build, then print the module's Python interface
 just replay                 # incremental build, then replay synthetic (or recorded) ticks offline
-just bench                  # time the Python reference against reflected and hand-written nanobind bindings
+just bench                  # time the Python reference, its Numba variant, and reflected and hand-written nanobind bindings
 just test                   # build and test the selected combination (may reuse image cache)
 just test-compiler-matrix   # test both bindings with the selected compiler (may reuse image cache)
 just test-matrix            # test all four compiler/binding combinations (may reuse image cache)

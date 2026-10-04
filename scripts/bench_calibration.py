@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Time the calibrator in readable Python and in C++ behind two kinds of bindings.
+"""Time the calibrator in readable Python, with Numba, and in C++ behind two kinds of bindings.
 
 Variants:
   python     scripts/merton_reference.py, the line-by-line Python translation
+  numba      scripts/merton_numba.py, the same class with its likelihood compiled by Numba
   reflected  merton_online_calibrator, bindings generated with C++26 reflection
   manual     merton_manual_bindings, equivalent hand-written nanobind bindings
 
 Validation comes first and stops the run on failure: the agreement and
 equivalence tests, then the exact timed workloads compared across variants.
 Calibration and replay time each variant in its own subprocess, in alternating
-order across runs. The cheap-call comparison loads both C++ modules into one
+order across runs. Only the Numba subprocesses import Numba; they compile
+before anything is timed, and report the import and compile times separately.
+The cheap-call comparison loads both C++ modules into one
 subprocess per run and alternates between them in ABBA blocks, so drift in
 machine state affects both equally. Timers cover only the calls being measured,
 with the garbage collector paused, as timeit does.
@@ -26,6 +29,7 @@ import datetime as dt
 import functools
 import gc
 import importlib
+import importlib.util
 import itertools
 import json
 import math
@@ -54,10 +58,12 @@ from scripts.merton_runtime import (  # noqa: E402
 )
 from scripts.synthetic_ticks import PathSpec, merton_ticks  # noqa: E402
 
-VARIANTS = ("python", "reflected", "manual")
+VARIANTS = ("python", "numba", "reflected", "manual")
 CPP_MODULES = {"reflected": "merton_online_calibrator", "manual": "merton_manual_bindings"}
+COMPILED = ("numba", *CPP_MODULES)
 LABELS = {
     "python": "Python reference",
+    "numba": "Python + Numba",
     "reflected": "C++, reflected bindings",
     "manual": "C++, hand-written bindings",
 }
@@ -87,14 +93,22 @@ FAIR_VALUE_REL_TOL = 1e-13
 
 FULL_PLAN = {
     "runs": 3,
-    "calibration": {"python": {"samples": 15, "warmup": 1}, "cpp": {"samples": 51, "warmup": 3}},
-    "replay": {"python": {"samples": 1}, "cpp": {"samples": 5}},
+    "calibration": {
+        "python": {"samples": 15, "warmup": 1},
+        "numba": {"samples": 51, "warmup": 3},
+        "cpp": {"samples": 51, "warmup": 3},
+    },
+    "replay": {"python": {"samples": 1}, "numba": {"samples": 5}, "cpp": {"samples": 5}},
     "calls": {"blocks": 16, "warmup_blocks": 1, "calls_per_sample": 100_000},
 }
 QUICK_PLAN = {
     "runs": 1,
-    "calibration": {"python": {"samples": 2, "warmup": 0}, "cpp": {"samples": 11, "warmup": 1}},
-    "replay": {"python": {"samples": 1}, "cpp": {"samples": 2}},
+    "calibration": {
+        "python": {"samples": 2, "warmup": 0},
+        "numba": {"samples": 11, "warmup": 1},
+        "cpp": {"samples": 11, "warmup": 1},
+    },
+    "replay": {"python": {"samples": 1}, "numba": {"samples": 2}, "cpp": {"samples": 2}},
     "calls": {"blocks": 3, "warmup_blocks": 1, "calls_per_sample": 20_000},
 }
 
@@ -105,6 +119,10 @@ QUICK_PLAN = {
 def make_calibrator(variant: str):
     if variant == "python":
         return ref.OnlineMertonCalibrator(ref.MertonParams(), ref.CalibratorConfig(**CONFIG))
+    if variant == "numba":
+        from scripts import merton_numba
+
+        return merton_numba.OnlineMertonCalibrator(ref.MertonParams(), ref.CalibratorConfig(**CONFIG))
     module = importlib.import_module(CPP_MODULES[variant])
     cfg = module.CalibratorConfig()
     for name, value in CONFIG.items():
@@ -252,15 +270,28 @@ def time_calls(first: str, blocks: int, warmup_blocks: int, calls: int) -> dict:
     }
 
 
+def numba_startup() -> dict:
+    """Import Numba and compile the likelihood, timing each (first use in this process)."""
+    start = time.perf_counter_ns()
+    from scripts import merton_numba
+
+    import_ns = time.perf_counter_ns() - start
+    compile_ns, _ = timed(merton_numba.warm_up)
+    return {"import_ns": import_ns, "compile_ns": compile_ns}
+
+
 def worker(spec: dict) -> dict:
     task, variant = spec["task"], spec.get("variant")
+    startup = numba_startup() if variant == "numba" else {}
     if task == "calibration":
-        return time_calibration(variant, spec["samples"], spec["warmup"])
-    if task == "replay":
-        return time_replay(variant, spec["samples"])
-    if task == "calls":
-        return time_calls(spec["first"], spec["blocks"], spec["warmup_blocks"], spec["calls_per_sample"])
-    raise ValueError(f"unknown task {task!r}")
+        result = time_calibration(variant, spec["samples"], spec["warmup"])
+    elif task == "replay":
+        result = time_replay(variant, spec["samples"])
+    elif task == "calls":
+        result = time_calls(spec["first"], spec["blocks"], spec["warmup_blocks"], spec["calls_per_sample"])
+    else:
+        raise ValueError(f"unknown task {task!r}")
+    return {**result, **startup}
 
 
 def run_worker(spec: dict) -> dict:
@@ -286,18 +317,23 @@ def params_agree(python_params, cpp_params) -> bool:
     )
 
 
-def check_python_matches(python_state: dict, cpp_state: dict, what: str) -> float:
-    exact = [k for k in python_state if k != "params"]
-    if any(python_state[k] != cpp_state[k] for k in exact):
-        raise SystemExit(f"validation failed: {what}: counters differ {python_state} vs {cpp_state}")
-    if not params_agree(python_state["params"], cpp_state["params"]):
-        raise SystemExit(f"validation failed: {what}: parameters differ {python_state} vs {cpp_state}")
-    return max(ulps(a, b) for a, b in zip(python_state["params"], cpp_state["params"]))
+def check_close(state: dict, cpp_state: dict, what: str) -> float:
+    """Counters and outcomes exactly, parameters within tolerance; returns the largest difference in ulps."""
+    exact = [k for k in state if k != "params"]
+    if any(state[k] != cpp_state[k] for k in exact):
+        raise SystemExit(f"validation failed: {what}: counters differ {state} vs {cpp_state}")
+    if not params_agree(state["params"], cpp_state["params"]):
+        raise SystemExit(f"validation failed: {what}: parameters differ {state} vs {cpp_state}")
+    return max(ulps(a, b) for a, b in zip(state["params"], cpp_state["params"]))
 
 
 def validate(tests_dir: Path) -> dict:
     progress("validating: agreement and equivalence tests")
-    tests = [tests_dir / "test_reference_agreement.py", tests_dir / "test_manual_bindings.py"]
+    tests = [
+        tests_dir / "test_reference_agreement.py",
+        tests_dir / "test_numba_agreement.py",
+        tests_dir / "test_manual_bindings.py",
+    ]
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", *map(str, tests)],
         capture_output=True,
@@ -318,11 +354,16 @@ def validate(tests_dir: Path) -> dict:
         outcome[variant]["fair_value"] = cal.fair_value(*FAIR_VALUE_ARGS)
     if outcome["reflected"] != outcome["manual"]:
         raise SystemExit("validation failed: reflected and hand-written modules differ")
-    py, cpp = dict(outcome["python"]), dict(outcome["reflected"])
-    py_fv, cpp_fv = py.pop("fair_value"), cpp.pop("fair_value")
-    worst = check_python_matches(py, cpp, "calibration workload")
-    if not math.isclose(py_fv, cpp_fv, rel_tol=FAIR_VALUE_REL_TOL, abs_tol=0.0):
-        raise SystemExit(f"validation failed: fair_value {py_fv!r} vs {cpp_fv!r}")
+    cpp = dict(outcome["reflected"])
+    cpp_fv = cpp.pop("fair_value")
+    worst, fair_value_ulps = {}, {}
+    for variant in ("python", "numba"):
+        state = dict(outcome[variant])
+        fv = state.pop("fair_value")
+        worst[variant] = check_close(state, cpp, f"calibration workload, {LABELS[variant]}")
+        if not math.isclose(fv, cpp_fv, rel_tol=FAIR_VALUE_REL_TOL, abs_tol=0.0):
+            raise SystemExit(f"validation failed: {LABELS[variant]} fair_value {fv!r} vs {cpp_fv!r}")
+        fair_value_ulps[variant] = ulps(fv, cpp_fv)
 
     replay_ticks = merton_ticks(PathSpec(seed=SEED, n_ticks=REPLAY_TICKS))
     replays = {}
@@ -337,8 +378,8 @@ def validate(tests_dir: Path) -> dict:
         "tests": summary,
         "calibration": cpp,
         "replay": replays["reflected"],
-        "python_vs_cpp_max_ulps": worst,
-        "fair_value_ulps": ulps(py_fv, cpp_fv),
+        "max_ulps_vs_cpp": worst,
+        "fair_value_ulps": fair_value_ulps,
     }
 
 
@@ -364,18 +405,29 @@ def across_runs(per_run: list[list[float]]) -> dict:
     }
 
 
+def ratios(numerator: dict, denominator: dict) -> tuple[float, list[float]]:
+    """Ratio of medians, and the ratio within each run (both variants ran in the same run)."""
+    per_run = [n / d for n, d in zip(numerator["run_medians"], denominator["run_medians"])]
+    return numerator["median"] / denominator["median"], per_run
+
+
 def summarize(raw: dict, runs: int) -> dict:
     summary = {"calibration": {}, "replay": {}, "calls": {}}
     for task in ("calibration", "replay"):
+        s = summary[task]
         for variant in VARIANTS:
-            summary[task][variant] = across_runs([r["ns"] for r in raw[task][variant]])
+            s[variant] = across_runs([r["ns"] for r in raw[task][variant]])
+        for variant in COMPILED:
+            s[variant]["speedup"], s[variant]["speedup_runs"] = ratios(s["python"], s[variant])
         for variant in CPP_MODULES:
-            ratios = [
-                p / c
-                for p, c in zip(summary[task]["python"]["run_medians"], summary[task][variant]["run_medians"])
-            ]
-            summary[task][variant]["speedup"] = summary[task]["python"]["median"] / summary[task][variant]["median"]
-            summary[task][variant]["speedup_runs"] = ratios
+            s[variant]["vs_numba"], s[variant]["vs_numba_runs"] = ratios(s["numba"], s[variant])
+    startups = [r for task in ("calibration", "replay") for r in raw[task]["numba"]]
+    summary["numba_startup"] = {}
+    for key in ("import_ns", "compile_ns"):
+        values = [r[key] for r in startups]
+        summary["numba_startup"][key] = {
+            "median": statistics.median(values), "min": min(values), "max": max(values), "n": len(values),
+        }
     for name in CALLS:
         per_run = [statistics.median(r["block_differences"][name]) for r in raw["calls"]]
         difference = statistics.median(per_run)
@@ -472,7 +524,9 @@ def environment(cpp: bool) -> dict:
         return env
     import importlib.metadata
 
+    import llvmlite.binding
     import merton_online_calibrator
+    import numba
 
     build_dir = Path(merton_online_calibrator.__file__).resolve().parent
     flags, compiler = {}, None
@@ -495,6 +549,10 @@ def environment(cpp: bool) -> dict:
             "compiler": version,
             "nanobind": importlib.metadata.version("nanobind"),
             "compile_flags": flags,
+            "numba": importlib.metadata.version("numba"),
+            "llvmlite": importlib.metadata.version("llvmlite"),
+            "numpy": importlib.metadata.version("numpy"),
+            "numba_cpu": numba.config.CPU_NAME or llvmlite.binding.get_host_cpu_name(),
         }
     )
     return env
@@ -514,6 +572,28 @@ def fmt_time(ns: float) -> str:
 
 def fmt_range(values: list[float], fmt) -> str:
     return fmt(min(values)) if len(values) == 1 else f"{fmt(min(values))} – {fmt(max(values))}"
+
+
+def fmt_speedup(v: float) -> str:
+    return f"{v:.1f}×"
+
+
+def fmt_ratio(v: float) -> str:
+    return f"{v:.2f}×"
+
+
+def versus_numba(cpp: dict, label: str) -> str:
+    """Compare a C++ variant with Numba: ratio of medians, and the ratio within each run."""
+    ratio, per_run = cpp["vs_numba"], cpp["vs_numba_runs"]
+    if len(per_run) >= 2 and min(per_run) <= 1.0 <= max(per_run):
+        return (
+            f"Neither Numba nor C++ with {label} was faster in every run (Numba time divided by C++ time, per run: "
+            f"{fmt_range(per_run, fmt_ratio)})."
+        )
+    if ratio >= 1.0:
+        return f"C++ with {label} was {fmt_ratio(ratio)} as fast as Numba (per run {fmt_range(per_run, fmt_ratio)})."
+    inverse = [1.0 / r for r in per_run]
+    return f"Numba was {fmt_ratio(1.0 / ratio)} as fast as C++ with {label} (per run {fmt_range(inverse, fmt_ratio)})."
 
 
 def axis_label(ms: float) -> str:
@@ -569,11 +649,11 @@ def calibration_svg(rows: list[tuple[str, float, float, float, str, str]], title
 
 def chart(report: dict) -> str:
     cal = report["summary"]["calibration"]
-    colours = {"python": "#3776AB", "reflected": "#D9822B", "manual": "#E8B07A"}
+    colours = {"python": "#3776AB", "numba": "#2E8B57", "reflected": "#D9822B", "manual": "#E8B07A"}
     rows = []
     for variant in VARIANTS:
         s = cal[variant]
-        note = f"  ({s['speedup']:.0f}× faster)" if variant in CPP_MODULES else ""
+        note = f"  ({s['speedup']:.0f}× faster)" if variant in COMPILED else ""
         medians = [m / 1e6 for m in s["run_medians"]]
         rows.append((LABELS[variant], s["median"] / 1e6, min(medians), max(medians), colours[variant], note))
     runs = report["plan"]["runs"]
@@ -601,8 +681,9 @@ def markdown(report: dict) -> str:
         "",
         f"- Agreement and equivalence tests: {val['tests']}.",
         "- The timed workloads gave the same results in every variant: counters and outcomes exactly; "
-        f"Python and C++ parameters within relative {PARAM_REL_TOL:g} (largest difference observed: "
-        f"{val['python_vs_cpp_max_ulps']:g} ulps); reflected and hand-written modules identical.",
+        f"Python and Numba parameters within relative {PARAM_REL_TOL:g} of C++ (largest difference observed: "
+        f"Python {val['max_ulps_vs_cpp']['python']:g} ulps, Numba {val['max_ulps_vs_cpp']['numba']:g} ulps); "
+        "reflected and hand-written modules identical.",
         "- This shows the implementations are consistent with each other. It does not validate the model.",
         "",
         "## One calibration",
@@ -611,7 +692,8 @@ def markdown(report: dict) -> str:
         f"{CPP_COORDINATE_STEPS} coordinate rounds ({1 + 8 * CPP_COORDINATE_STEPS} likelihood evaluations), "
         "the live runtime's configuration. Each sample starts from a fresh calibrator fed the same "
         f"{CALIBRATION_TICKS:,} synthetic ticks outside the timer. Samples per run: Python "
-        f"{cal_plan['python']['samples']}, each C++ variant {cal_plan['cpp']['samples']}, after warm-up. "
+        f"{cal_plan['python']['samples']}, Numba {cal_plan['numba']['samples']}, each C++ variant "
+        f"{cal_plan['cpp']['samples']}, after warm-up. "
         "Each variant runs in its own process, in alternating order between runs.",
         "",
         "| Variant | Median | Run medians | IQR, all samples | Min | Samples |",
@@ -624,12 +706,19 @@ def markdown(report: dict) -> str:
             f"| {LABELS[variant]} | {fmt_time(c['median'])} | {fmt_range(c['run_medians'], fmt_time)} | "
             f"{fmt_time(pooled['q1'])} – {fmt_time(pooled['q3'])} | {fmt_time(pooled['min'])} | {pooled['n']} |"
         )
-    refl, man = s["calibration"]["reflected"], s["calibration"]["manual"]
+    refl, man, nb = (s["calibration"][v] for v in ("reflected", "manual", "numba"))
+    startup = s["numba_startup"]
     lines += [
         "",
-        f"Speedup, same algorithm on this machine: **{refl['speedup']:.0f}×** with reflected bindings "
-        f"(per run {fmt_range(refl['speedup_runs'], lambda v: f'{v:.1f}×')}) and {man['speedup']:.0f}× "
-        "with hand-written bindings.",
+        f"Speedup over the Python reference, same algorithm on this machine: **{refl['speedup']:.0f}×** with C++ "
+        f"behind reflected bindings (per run {fmt_range(refl['speedup_runs'], fmt_speedup)}), "
+        f"{man['speedup']:.0f}× with hand-written bindings, and **{nb['speedup']:.0f}×** with Numba "
+        f"(per run {fmt_range(nb['speedup_runs'], fmt_speedup)}). " + versus_numba(refl, "reflected bindings"),
+        "",
+        "Numba runs without an on-disk cache, so every new process pays two one-off costs that are not in the "
+        f"timings: importing Numba ({fmt_time(startup['import_ns']['median'])}) and compiling the likelihood on "
+        f"first use ({fmt_time(startup['compile_ns']['median'])}), medians over {startup['compile_ns']['n']} "
+        "processes. The C++ modules are compiled ahead of time by the build.",
         "",
         "![Calibration time](calibration.svg)",
         "",
@@ -651,7 +740,9 @@ def markdown(report: dict) -> str:
     lines += [
         "",
         f"Speedup: {s['replay']['reflected']['speedup']:.0f}× (reflected), "
-        f"{s['replay']['manual']['speedup']:.0f}× (hand-written).",
+        f"{s['replay']['manual']['speedup']:.0f}× (hand-written), {s['replay']['numba']['speedup']:.0f}× (Numba, "
+        "where `update_tick` and the gating stay in Python). "
+        + versus_numba(s["replay"]["reflected"], "reflected bindings"),
         "",
         "## Cheap calls: reflected versus hand-written bindings",
         "",
@@ -725,6 +816,13 @@ def markdown(report: dict) -> str:
                 f"| `{name}` | {i} | {cells[0]} | {cells[1]} "
                 f"| {diff['median']:+.2f} ns ({diff['q1']:+.2f} to {diff['q3']:+.2f}) |"
             )
+    cpp_flags = env.get("compile_flags", {}).get("merton_online_calibrator.cpp", [])
+    march = next((flag for flag in cpp_flags if flag.startswith("-march")), None)
+    cpp_target = (
+        f"the C++ flags above include `{march}`"
+        if march
+        else "the C++ flags above set no `-march`, so the C++ modules target the compiler's default, generic x86-64"
+    )
     lines += [
         "",
         "## Conditions",
@@ -739,13 +837,18 @@ def markdown(report: dict) -> str:
         f"JIT {'on' if env['python_jit'] else 'off'}). Python timings depend on how CPython was built; "
         "`--reference-only` times the Python reference in any interpreter for comparison.",
         f"- {env.get('compiler')}; nanobind {env.get('nanobind')}.",
-        f"- Compile flags (`merton_online_calibrator.cpp`): `{' '.join(env.get('compile_flags', {}).get('merton_online_calibrator.cpp', []))}`.",
+        f"- Compile flags (`merton_online_calibrator.cpp`): `{' '.join(cpp_flags)}`.",
+        f"- Numba {env.get('numba')} with llvmlite {env.get('llvmlite')} and NumPy {env.get('numpy')}: plain "
+        f"`@njit` (no `fastmath`, no `parallel`), compiled for this machine's CPU (`{env.get('numba_cpu')}`); "
+        f"{cpp_target}.",
         "- Garbage collector paused inside timed regions, as timeit does.",
         "",
         "## Scope",
         "",
-        "Speedups compare the same algorithm, in readable Python and in C++, on this machine. There is no "
-        "comparison with NumPy, Numba or other ways of speeding up Python.",
+        "Speedups compare the same algorithm on this machine: in readable Python, in the same Python with its "
+        "likelihood compiled by Numba, and in C++. Each uses its defaults: plain `@njit` for Numba, the build's "
+        "flags for C++. There is no comparison with NumPy vectorisation, Cython, Pythran or other ways of "
+        "speeding up Python.",
         "",
     ]
     return "\n".join(lines)
@@ -774,7 +877,7 @@ def collect(plan: dict, validation: dict) -> dict:
                 raw["calls"].append(run(label, {"task": task, "first": first, **plan["calls"]}, "both"))
                 continue
             for variant in order:
-                kind = "python" if variant == "python" else "cpp"
+                kind = "cpp" if variant in CPP_MODULES else variant
                 raw[task][variant].append(run(label, {"task": task, "variant": variant, **plan[task][kind]}, variant))
     return raw
 
@@ -787,8 +890,8 @@ def check_worker(spec: dict, result: dict, validation: dict) -> None:
                              f"{result['state']}")
         return
     expected = validation[task]
-    if variant == "python":
-        check_python_matches(result["state"], expected, f"timed {task}")
+    if variant not in CPP_MODULES:
+        check_close(result["state"], expected, f"timed {task}, {LABELS[variant]}")
     elif result["state"] != expected:
         raise SystemExit(f"validation failed: timed {task} for {variant} gave {result['state']}, expected {expected}")
 
@@ -831,10 +934,14 @@ def main() -> None:
         return
     if args.from_json:
         report = json.loads(args.from_json.read_text())
+        if "numba" not in report["raw"]["calibration"]:
+            raise SystemExit(f"{args.from_json} has no Numba timings; rerun the benchmark")
         report["summary"] = summarize(report["raw"], report["plan"]["runs"])
         write_report(report, args.out or args.from_json.parent)
         return
 
+    if importlib.util.find_spec("numba") is None:
+        raise SystemExit("Numba is not installed in this image; rebuild it with `just docker-build`.")
     plan = json.loads(json.dumps(QUICK_PLAN if args.quick else FULL_PLAN))
     if args.runs:
         plan["runs"] = args.runs

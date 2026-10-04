@@ -88,9 +88,6 @@ COPY --from=clang-builder /opt/clang-p2996 /opt/clang-p2996
 ENV PATH="/opt/python-${PYTHON_MM}/bin:/opt/clang-p2996/bin:$PATH" \
     CXX="/opt/clang-p2996/bin/clang++" \
     CC="/opt/clang-p2996/bin/clang"
-COPY requirements-docker.lock.${PYTHON_MM} /tmp/requirements-docker.lock
-RUN python${PYTHON_MM} -m pip install --no-cache-dir --require-hashes -r /tmp/requirements-docker.lock && \
-    rm -f /tmp/requirements-docker.lock
 RUN set -euo pipefail && cd /tmp && \
     curl -fsSLO "https://github.com/casey/just/releases/download/${JUST_VERSION}/just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz" && \
     echo "${JUST_SHA256}  just-${JUST_VERSION}-x86_64-unknown-linux-musl.tar.gz" | sha256sum -c - && \
@@ -109,6 +106,10 @@ RUN set -euo pipefail && cd /tmp && \
       --disable-test-suite --disable-examples && \
     make -j"$(nproc)" && make install && \
     cd / && rm -rf /tmp/QuantLib-${QUANTLIB_VERSION} /tmp/QuantLib-${QUANTLIB_VERSION}.tar.gz
+# After QuantLib, so that changing the lockfile does not rebuild QuantLib.
+COPY requirements-docker.lock.${PYTHON_MM} /tmp/requirements-docker.lock
+RUN python${PYTHON_MM} -m pip install --no-cache-dir --require-hashes -r /tmp/requirements-docker.lock && \
+    rm -f /tmp/requirements-docker.lock
 COPY print-build-info.sh /usr/local/bin/merton-build-info
 RUN chmod +x /usr/local/bin/merton-build-info && merton-build-info
 WORKDIR /workspace

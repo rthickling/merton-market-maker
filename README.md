@@ -120,7 +120,7 @@ cd cpp
 just test      # build and test the selected combination
 just api       # print the reflected Python interface
 just replay    # replay a seeded synthetic path (or recorded ticks)
-just bench     # validate, then time Python against reflected and hand-written bindings
+just bench     # validate, then time Python, Numba, and C++ behind reflected and hand-written bindings
 ```
 
 Supported combinations: GCC 16.2 (libstdc++) and the pinned clang-p2996 fork (libc++); nanobind and pybind11; CPython 3.14.8 (default) and 3.13.16.
@@ -131,9 +131,9 @@ Limits of the reflection layer, as built:
 - Python defaults are not generated (omitting `r` from `fair_value` raises `TypeError`);
 - calls hold the GIL; the calibrator is mutable and not synchronised across threads.
 
-`tests/test_reference_agreement.py` compares the C++ calibrator with a line-by-line Python translation on the same seeded ticks. Matching results show the two implementations are consistent with each other. They do not validate the financial model.
+`tests/test_reference_agreement.py` compares the C++ calibrator with a line-by-line Python translation on the same seeded ticks, and `tests/test_numba_agreement.py` compares that translation with `scripts/merton_numba.py`, the same class with its likelihood compiled by Numba. Matching results show the implementations are consistent with each other. They do not validate the financial model.
 
-`just bench` times that same algorithm in readable Python and in C++ behind reflected bindings and equivalent hand-written nanobind bindings. A speedup is for this algorithm on the machine that ran the benchmark. There is no comparison with NumPy or Numba. The report also says whether cheap calls through the reflected module were slower than the hand-written module by more than the run-to-run spread. On the machine used while writing these notes (AMD Ryzen 7 PRO 7840U, CPython 3.14.8 built without profile-guided or link-time optimisation, GCC 16.2, nanobind 2.12.0), one calibration was about 36× faster in C++ than in the Python reference, and no cheap call was slower through the reflected bindings by more than that spread. Rerun `just bench` before quoting a number.
+`just bench` times that same algorithm in readable Python, in that Python with its likelihood compiled by Numba, and in C++ behind reflected bindings and equivalent hand-written nanobind bindings. A speedup is for this algorithm on the machine that ran the benchmark. There is no comparison with NumPy vectorisation, Cython or Pythran. The report also says whether cheap calls through the reflected module were slower than the hand-written module by more than the run-to-run spread. On the machine used while writing these notes (AMD Ryzen 7 PRO 7840U, CPython 3.14.8 built without profile-guided or link-time optimisation, GCC 16.2, nanobind 2.12.0, Numba 0.68.0), one calibration was about 35× faster in C++ than in the Python reference and about 37× faster with Numba, which compiles for the host CPU where the C++ build targets generic x86-64. No cheap call was slower through the reflected bindings by more than that spread. Rerun `just bench` before quoting a number.
 
 ## References & Further Reading
 * Blog Post: [Stop Choosing: Get C++ Performance in Python Algos with C++26](https://profitview.net/blog/cpp26-reflection-python-algo-trading)

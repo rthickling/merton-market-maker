@@ -1,6 +1,0 @@
-{
-  "clangd.path": "/opt/clang-p2996/bin/clangd",
-  "clangd.arguments": [
-    "--query-driver=/usr/bin/g++,/usr/bin/c++,/usr/bin/clang++,/opt/clang-p2996/bin/clang++"
-  ]
-}

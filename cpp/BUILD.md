@@ -6,7 +6,7 @@ The supported build path is Docker through `just`. A host compiler, Python envir
 
 Prerequisites:
 
-- Docker with `linux/amd64` container support
+- Docker with `linux/amd64` container support, runnable without `sudo`
 - [`just`](https://github.com/casey/just) 1.58 or newer
 
 From a fresh clone:
@@ -17,7 +17,7 @@ cd merton-market-maker/cpp
 just test
 ```
 
-This builds the default GCC 16.2 / nanobind / CPython 3.14 environment, compiles `merton_online_calibrator.so`, imports it, and runs `cpp/tests/`. All compiler, Python, QuantLib, binding, and test dependencies are installed inside the pinned Docker image.
+This builds the default GCC 16.2 / nanobind / CPython 3.14 environment, compiles `merton_online_calibrator.so`, imports it, and runs `cpp/tests/`. All compiler, Python, QuantLib, binding, and test dependencies are installed inside the pinned Docker image. Nothing needs editing first. The first run builds that image from source, which takes about 30 minutes on a 4-core machine; later runs reuse it.
 
 To demonstrate the calibrator on live public market data (no ProfitView):
 
@@ -91,6 +91,12 @@ just bench                  # agreement checks, then timings (nanobind only)
 just test                   # clean build and pytest (may reuse the image)
 just demo                   # live Binance quotes; needs the network
 ```
+
+## Editors
+
+The committed `.vscode/settings.json` (Cursor reads it too) holds only settings that work on any machine. It points CMake Tools at `cpp/`, stops it configuring on the host, and turns off the Microsoft C/C++ error squiggles. Put machine-specific settings, such as an interpreter or a `clangd` path, in your user settings rather than in the repository.
+
+Host `clangd` and IntelliSense do not parse C++26 reflection, so `reflection_bind_*.hpp` and `python_module_entry_*.cpp` show errors in the editor even though they build. Only `clangd` from the clang-p2996 install (`/opt/clang-p2996/bin/clangd` in the Clang image) understands them; `cpp/.clangd` holds the flags it needs.
 
 ## Commands
 

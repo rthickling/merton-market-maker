@@ -1,6 +1,6 @@
 # Reflection sources need the same compile line as cpp/toolchain-p2996.cmake.
-# Use clangd from that install (see .vscode/settings.json: clangd.path), not the
-# host LLVM clangd — otherwise <meta>, splices, and expansion statements won't parse.
+# Only clangd from that install (/opt/clang-p2996/bin/clangd in the Clang image)
+# parses <meta>, splices and expansion statements; host LLVM clangd flags these files.
 #
 # Paths match the Docker/dev image layout; override with a user .clangd fragment if needed.
 # python_module_entry_*.cpp also needs nanobind/pybind + Python dev headers; those appear

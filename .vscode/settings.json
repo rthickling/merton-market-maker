@@ -1,10 +1,8 @@
 {
-  "terminal.integrated.env.linux": {
-    "PYENV_VERSION": "merton-market-maker"
-  },
-  "C_Cpp.errorSquiggles": "disabled",
-  "clangd.path": "/opt/clang-p2996/bin/clangd",
-  "clangd.arguments": [
-    "--query-driver=/usr/bin/g++,/usr/bin/c++,/usr/bin/clang++,/opt/clang-p2996/bin/clang++"
-  ]
+  // Shared settings only. Machine-specific paths belong in user settings.
+  // The build runs in Docker through `just`, so CMake Tools must not configure on the host.
+  "cmake.sourceDirectory": "${workspaceFolder}/cpp",
+  "cmake.configureOnOpen": false,
+  // The Microsoft C/C++ engine cannot parse C++26 reflection.
+  "C_Cpp.errorSquiggles": "disabled"
 }

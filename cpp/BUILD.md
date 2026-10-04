@@ -102,6 +102,7 @@ Host `clangd` and IntelliSense do not parse C++26 reflection, so `reflection_bin
 
 ```bash
 just show-defaults          # show compiler, binding, image and output selection
+just shell                  # shell in the image; python3 there imports the built module
 just versions               # validate and print pinned versions from the image
 just probe                  # compile and run the reflection feature probe
 just docker-build-clean     # rebuild the selected image with --pull --no-cache

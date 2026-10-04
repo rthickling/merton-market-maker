@@ -257,13 +257,14 @@ copy-module:
   install -d "$MODULE_DEST_DIR"
   cp -f "{{root}}/$build_dir/{{module_name}}" "$MODULE_DEST_DIR/"
 
-# Interactive shell with selected compiler and QuantLib on PATH.
+# Interactive shell with the selected compiler and QuantLib on PATH; python3 imports the built module.
 shell:
   #!/usr/bin/env bash
   set -euo pipefail
   # shellcheck disable=SC1091
   source "{{root}}/resolve-toolchain.sh"
-  docker run -it --rm -v "{{root}}:/workspace" -w /workspace "$image_name" bash
+  docker run -it --rm -v "{{root}}:/workspace" -w /workspace \
+    -e PYTHONPATH="/workspace/$build_dir" "$image_name" bash
 
 clang-pp *ARGS:
   #!/usr/bin/env bash

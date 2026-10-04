@@ -13,6 +13,19 @@ This project is an engineering demonstration. The included Merton Jump Diffusion
 * The value is in the infrastructure, not the strategy.
 
 ---
+## Quick start
+
+You need Docker (runnable without `sudo`) on an x86-64 machine, and [`just`](https://github.com/casey/just) 1.58 or newer. Compilers, Python and libraries live in a pinned Docker image, so nothing else goes on the host and nothing needs editing.
+
+```bash
+git clone https://github.com/rthickling/merton-market-maker.git
+cd merton-market-maker/cpp
+just test   # first run builds the image (about 30 minutes on 4 cores), then builds and tests
+just demo   # stream live Binance quotes into the C++ calibrator (paper quotes only)
+```
+
+After the first build, `just api`, `just replay` and `just bench` run offline ([details](#offline-once-the-image-exists)). [BUILD](cpp/BUILD.md) covers the other compilers, bindings and Python versions.
+
 ## A Practical Hybrid Workflow
 The algorithmic trading world is often split into two camps:
 
@@ -26,7 +39,7 @@ C++26 Reflection (P2996) changes this. It is *compiler-supported* compile-time p
 ## Through the Mirror into a New C++ World
 Instead of writing a manual binding stanza for every C++ function, this project uses a generic reflection loop. When you add or change a public method in your C++ math engine, the Python bindings update automatically at compile time.
 
-### Shared reflection idea
+### Traverse the Parse Tree - and Bind
 ```c++
 template <typename T>
 void bind_reflected_member_functions(/* backend class wrapper */& cl) {
@@ -40,21 +53,8 @@ void bind_reflected_member_functions(/* backend class wrapper */& cl) {
         }
     }
 }
-```
 
-### `pybind11` example
-```c++
-PYBIND11_MODULE(merton_online_calibrator, m) {
-    py::class_<merton::OnlineMertonCalibrator> cl(m, "OnlineMertonCalibrator");
-    cl.def(py::init<merton::MertonParams, merton::CalibratorConfig>(),
-           py::arg("initial"), py::arg("config") = merton::CalibratorConfig{});
-    bind_reflected_member_functions(cl);
-}
-```
-
-### `nanobind` example
-```c++
-NB_MODULE(merton_online_calibrator, m) {
+NB_MODULE(merton_online_calibrator, m) { // Using `nanobind`
     nb::class_<merton::OnlineMertonCalibrator> cl(m, "OnlineMertonCalibrator");
     cl.def(nb::init<merton::MertonParams, merton::CalibratorConfig>(),
            "initial"_a, "config"_a = merton::CalibratorConfig{});
@@ -66,6 +66,26 @@ A public method added to an already-registered C++ type is then available from P
 
 The reflection operator `^^T` converts a type into a reflected meta-object, and the splicer `[:m:]` converts reflected members back into run-time expressions.
 
+### Use it in Python
+
+To try this after `just test`, run `just shell`, then `python3`.
+
+```python
+from merton_online_calibrator import OnlineMertonCalibrator, MertonParams
+
+params = MertonParams()
+params.sigma, params.lambda_, params.mu_j, params.delta_j = 0.65, 3.5, -0.2, 0.6
+calibrator = OnlineMertonCalibrator(params)
+
+for i, price in enumerate([68000.0, 68010.0, 67995.0, 68020.0]):
+    calibrator.update_tick(price, 1_700_000_000_000_000 + i * 1_000_000)
+calibrator.maybe_update_params()  # refits once enough returns have arrived
+
+p = calibrator.params()
+print(f"sigma={p.sigma}, lambda={p.lambda_}, samples={calibrator.sample_count()}")
+print(f"fair value, 8h: {calibrator.fair_value(68020.0, 0.0, 8 / (365.25 * 24), 0.0):.2f}")
+```
+
 ---
 ## Why Merton Jump Diffusion?
 I chose the MJD model because its math is heavy. It requires infinite-series-style mixture summations that would be much slower in pure Python. It illustrates the "Speed-to-Book" need for compiled math, while the high-level trading logic still benefits from Python's "Speed-to-Market."
@@ -73,8 +93,7 @@ I chose the MJD model because its math is heavy. It requires infinite-series-sty
 ## Technical Stack
 C++26 reflection is built with either released GCC 16.2 and libstdc++ or the pinned Bloomberg Clang P2996 fork and libc++. Both toolchains support the nanobind and pybind11 backends and run entirely in pinned `linux/amd64` Docker environments.
 
-### Run the algo from a fresh clone
-Prerequisites: [Docker](https://www.docker.com/) and [`just`](https://github.com/casey/just).
+### Live demo
 
 ```bash
 cd cpp

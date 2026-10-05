@@ -7,6 +7,7 @@ are analytics and do not move them.
 """
 from __future__ import annotations
 
+import functools
 import math
 import os
 from dataclasses import dataclass
@@ -84,6 +85,21 @@ def funding_annual(
     return float(rate_per_interval) * (HOURS_PER_YEAR / hours)
 
 
+def _accepts_theo_keyword(fn):
+    """Keep paper_quotes(theo=...) working: theo was reference_price's former name."""
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        if "theo" in kwargs:
+            if "reference_price" in kwargs:
+                raise TypeError(f"{fn.__name__}() got both reference_price and its former name, theo")
+            kwargs["reference_price"] = kwargs.pop("theo")
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
+@_accepts_theo_keyword
 def paper_quotes(
     reference_price: float, mkt_bid: float, mkt_ask: float, min_half_spread_bps: float = MIN_HALF_SPREAD_BPS
 ) -> tuple[float, float]:
@@ -91,6 +107,7 @@ def paper_quotes(
 
     The half-spread is the larger of min_half_spread_bps of reference_price and
     half the market spread. The demos pass the market midpoint (midpoint_quotes).
+    The former keyword, theo, is still accepted.
     """
     min_half = reference_price * (min_half_spread_bps / 10000.0)
     mkt_half = max((mkt_ask - mkt_bid) / 2.0, 0.0)

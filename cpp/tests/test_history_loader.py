@@ -1,3 +1,4 @@
+import inspect
 import re
 import sys
 from pathlib import Path
@@ -32,6 +33,17 @@ def test_paper_quotes_widen_to_min_spread():
     bid, ask = paper_quotes(100.0, 99.99, 100.01, min_half_spread_bps=2.0)
     assert bid == pytest.approx(99.98)
     assert ask == pytest.approx(100.02)
+
+
+def test_paper_quotes_accepts_its_former_keyword():
+    expected = paper_quotes(100.0, 99.99, 100.01, 2.0)
+    assert paper_quotes(theo=100.0, mkt_bid=99.99, mkt_ask=100.01, min_half_spread_bps=2.0) == expected
+    assert paper_quotes(reference_price=100.0, mkt_bid=99.99, mkt_ask=100.01, min_half_spread_bps=2.0) == expected
+    assert list(inspect.signature(paper_quotes).parameters)[0] == "reference_price"
+    with pytest.raises(TypeError):
+        paper_quotes(theo=100.0, reference_price=100.0, mkt_bid=99.99, mkt_ask=100.01)
+    with pytest.raises(TypeError):
+        paper_quotes(99.99, 100.01, theo=100.0)
 
 
 @pytest.mark.parametrize(

@@ -4,9 +4,10 @@ OnlineMertonCalibrator here is the class from scripts/merton_reference.py with
 one method replaced: the negative log-likelihood, where nearly all the time
 goes, is computed by neg_log_likelihood below, which Numba compiles to machine
 code. Ticks, gating, the median time step, the coordinate search and
-fair_value stay in Python. The kernel is the reference's arithmetic in the same
-order; the parameters arrive as floats and the return window as a NumPy array,
-because compiled code cannot take the dataclass or the deque.
+no_jump_conditional_mean (with its former name, fair_value) stay in Python.
+The kernel is the reference's arithmetic in the same order; the parameters
+arrive as floats and the return window as a NumPy array, because compiled code
+cannot take the dataclass or the deque.
 
 Plain @njit: no fastmath, no parallel, no on-disk cache. Numba compiles on the
 first call in each process; warm_up() does that up front.

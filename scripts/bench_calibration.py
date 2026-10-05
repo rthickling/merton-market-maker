@@ -77,11 +77,13 @@ LABELS = {
 }
 # Cheap-call comparisons, each in its own subprocesses: raw/summary key -> (variant, baseline).
 CALL_PAIRS = {"calls": ("reflected", "manual"), "calls_cppyy": ("cppyy", "manual")}
-CALLS = ("fair_value", "update_tick", "sample_count")
+CALLS = ("no_jump_conditional_mean", "update_tick", "sample_count")
 CALL_SIGNATURES = {
-    "fair_value": "fair_value(s0, q_annual, t_years, r)",
+    "no_jump_conditional_mean": "no_jump_conditional_mean(s0, q_annual, t_years, r)",
     "update_tick": "update_tick(price, epoch_us)",
     "sample_count": "sample_count()",
+    # Earlier reports timed the same compiled function under this name; --from-json still reads them.
+    "fair_value": "fair_value(s0, q_annual, t_years, r)",
 }
 
 # The live runtime's configuration (scripts/merton_runtime.py).
@@ -95,11 +97,11 @@ CONFIG = {
 SEED = 7
 CALIBRATION_TICKS = CPP_WINDOW_SIZE + CPP_UPDATE_EVERY_N_RETURNS + 1
 REPLAY_TICKS = CPP_WINDOW_SIZE + 1
-FAIR_VALUE_ARGS = (68_000.0, 0.1, T_YEARS, 0.0)
+NO_JUMP_MEAN_ARGS = (68_000.0, 0.1, T_YEARS, 0.0)
 
 # Same tolerances as tests/test_reference_agreement.py.
 PARAM_REL_TOL, PARAM_ABS_TOL = 1e-12, 1e-15
-FAIR_VALUE_REL_TOL = 1e-13
+NO_JUMP_MEAN_REL_TOL = 1e-13
 
 FULL_PLAN = {
     "runs": 3,
@@ -208,7 +210,7 @@ def time_replay(variant: str, samples: int) -> dict:
     return {"ns": times, "state": states[0]}
 
 
-def _loop_fair_value(f, n, s0, q_annual, t_years, r):
+def _loop_no_jump_mean(f, n, s0, q_annual, t_years, r):
     for _ in itertools.repeat(None, n):
         f(s0, q_annual, t_years, r)
 
@@ -242,8 +244,8 @@ def time_calls(pair: list[str], first: str, blocks: int, warmup_blocks: int, cal
 
     def sample(name: str, variant: str) -> float:
         cal = cals[variant]
-        if name == "fair_value":
-            loop = functools.partial(_loop_fair_value, cal.fair_value, calls, *FAIR_VALUE_ARGS)
+        if name == "no_jump_conditional_mean":
+            loop = functools.partial(_loop_no_jump_mean, cal.no_jump_conditional_mean, calls, *NO_JUMP_MEAN_ARGS)
         elif name == "update_tick":
             # Rising timestamps keep update_tick on its normal path (accept, push, pop).
             start = next_ts[variant]
@@ -272,7 +274,8 @@ def time_calls(pair: list[str], first: str, blocks: int, warmup_blocks: int, cal
                 per_call[variant][name] += got[variant]
             differences[name].append(statistics.fmean(got[pair[0]]) - statistics.fmean(got[pair[1]]))
     state = {
-        variant: {**snapshot(cal), "fair_value": cal.fair_value(*FAIR_VALUE_ARGS)} for variant, cal in cals.items()
+        variant: {**snapshot(cal), "no_jump_conditional_mean": cal.no_jump_conditional_mean(*NO_JUMP_MEAN_ARGS)}
+        for variant, cal in cals.items()
     }
     return {
         "pair": list(pair),
@@ -394,20 +397,22 @@ def validate(tests_dir: Path) -> dict:
         cal = fed_calibrator(variant, ticks)
         changed = cal.maybe_update_params()
         outcome[variant] = {**snapshot(cal), "changed": changed}
-        outcome[variant]["fair_value"] = cal.fair_value(*FAIR_VALUE_ARGS)
+        outcome[variant]["no_jump_conditional_mean"] = cal.no_jump_conditional_mean(*NO_JUMP_MEAN_ARGS)
     for variant in CPP_MODULES:
         if outcome[variant] != outcome["reflected"]:
             raise SystemExit(f"validation failed: {LABELS[variant]} and {LABELS['reflected']} differ")
     cpp = dict(outcome["reflected"])
-    cpp_fv = cpp.pop("fair_value")
-    worst, fair_value_ulps = {}, {}
+    cpp_mean = cpp.pop("no_jump_conditional_mean")
+    worst, no_jump_mean_ulps = {}, {}
     for variant in ("python", "numba"):
         state = dict(outcome[variant])
-        fv = state.pop("fair_value")
+        mean = state.pop("no_jump_conditional_mean")
         worst[variant] = check_close(state, cpp, f"calibration workload, {LABELS[variant]}")
-        if not math.isclose(fv, cpp_fv, rel_tol=FAIR_VALUE_REL_TOL, abs_tol=0.0):
-            raise SystemExit(f"validation failed: {LABELS[variant]} fair_value {fv!r} vs {cpp_fv!r}")
-        fair_value_ulps[variant] = ulps(fv, cpp_fv)
+        if not math.isclose(mean, cpp_mean, rel_tol=NO_JUMP_MEAN_REL_TOL, abs_tol=0.0):
+            raise SystemExit(
+                f"validation failed: {LABELS[variant]} no_jump_conditional_mean {mean!r} vs {cpp_mean!r}"
+            )
+        no_jump_mean_ulps[variant] = ulps(mean, cpp_mean)
 
     replay_ticks = merton_ticks(PathSpec(seed=SEED, n_ticks=REPLAY_TICKS))
     replays = {}
@@ -431,7 +436,7 @@ def validate(tests_dir: Path) -> dict:
         "calibration": cpp,
         "replay": replays["reflected"],
         "max_ulps_vs_cpp": worst,
-        "fair_value_ulps": fair_value_ulps,
+        "no_jump_mean_ulps": no_jump_mean_ulps,
     }
 
 
@@ -463,10 +468,15 @@ def ratios(numerator: dict, denominator: dict) -> tuple[float, list[float]]:
     return numerator["median"] / denominator["median"], per_run
 
 
+def call_names(calls: dict) -> list[str]:
+    """The cheap calls a report timed, in order. Earlier reports time fair_value instead."""
+    return [name for name in calls if name in CALL_SIGNATURES]
+
+
 def summarize_calls(results: list[dict], pair: tuple[str, str], runs: int) -> dict:
     """Per call: both variants across runs, and the paired difference pair[0] minus pair[1]."""
     summary = {}
-    for name in CALLS:
+    for name in call_names(results[0]["block_differences"]):
         per_run = [statistics.median(r["block_differences"][name]) for r in results]
         difference = statistics.median(per_run)
         spread = max(per_run) - min(per_run)
@@ -751,7 +761,7 @@ def markdown_cppyy_calls(calls: dict, runs: int, calls_plan: dict) -> list[str]:
         "|---|---|---|---|---|---|---|",
     ]
     slower, faster, within = [], [], []
-    for name in CALLS:
+    for name in call_names(calls):
         c = calls[name]
         d, base = c["difference"], c["manual"]["median"]
         if runs < 2:
@@ -885,7 +895,7 @@ def markdown(report: dict) -> str:
         "|---|---|---|---|---|---|",
     ]
     slower, faster = [], []
-    for name in CALLS:
+    for name in call_names(s["calls"]):
         c = s["calls"][name]
         d, base = c["difference"], c["both_modules"]["median"]
         if runs < 2:
@@ -930,7 +940,7 @@ def markdown(report: dict) -> str:
         "| Call | Run | Reflected | Hand-written | Paired difference |",
         "|---|---|---|---|---|",
     ]
-    for name in CALLS:
+    for name in call_names(s["calls"]):
         for i, run in enumerate(s["calls"][name]["runs"], start=1):
             cells = [
                 f"{p['median']:.1f} ns ({p['q1']:.1f}–{p['q3']:.1f}; min {p['min']:.1f})"
@@ -1106,7 +1116,7 @@ def main() -> None:
         "finished_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "plan": plan,
         "workload": {"config": CONFIG, "seed": SEED, "calibration_ticks": CALIBRATION_TICKS,
-                     "replay_ticks": REPLAY_TICKS, "fair_value_args": FAIR_VALUE_ARGS},
+                     "replay_ticks": REPLAY_TICKS, "no_jump_mean_args": NO_JUMP_MEAN_ARGS},
         "validation": validation,
         "environment": environment(cpp=True),
         "conditions": {"before": before, "after": conditions()},

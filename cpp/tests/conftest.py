@@ -49,13 +49,13 @@ class CalibratorHarness:
     def params(self):
         return self.cal.params()
 
-    def fair_value(self, price: float, q_annual: float, t_years: float, r: float) -> float:
-        return self.cal.fair_value(price, q_annual, t_years, r)
+    def no_jump_conditional_mean(self, price: float, q_annual: float, t_years: float, r: float) -> float:
+        return self.cal.no_jump_conditional_mean(price, q_annual, t_years, r)
 
-    def fair_value_quantlib(
+    def no_jump_conditional_mean_quantlib(
         self, price: float, q_annual: float, t_years: float, r: float
     ) -> float:
-        return self.cal.fair_value_quantlib(price, q_annual, t_years, r)
+        return self.cal.no_jump_conditional_mean_quantlib(price, q_annual, t_years, r)
 
 
 @pytest.fixture

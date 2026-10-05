@@ -1,3 +1,4 @@
+import re
 import sys
 from pathlib import Path
 
@@ -8,7 +9,7 @@ sys.path.insert(0, str(_REPO))
 
 from scripts.binance_perps import DEMO_PERPS, require_demo_perp
 from scripts.history import load_price_ticks, resample_last_price
-from scripts.merton_runtime import funding_annual, horizon_years, paper_quotes
+from scripts.merton_runtime import funding_annual, horizon_years, midpoint_quotes, paper_quotes
 
 
 def test_csv_history_and_resample(tmp_path):
@@ -31,6 +32,37 @@ def test_paper_quotes_widen_to_min_spread():
     bid, ask = paper_quotes(100.0, 99.99, 100.01, min_half_spread_bps=2.0)
     assert bid == pytest.approx(99.98)
     assert ask == pytest.approx(100.02)
+
+
+@pytest.mark.parametrize(
+    "bid,ask,half_spread",
+    [
+        (99.0, 101.0, 1.0),  # wide book: half the market spread
+        (99.999, 100.001, 0.02),  # tight book: the 2 bp floor
+        (100.0, 100.0, 0.02),  # locked book: the floor
+        (68_000.0, 68_000.1, 68_000.05 * 2e-4),  # the floor scales with mid
+    ],
+)
+def test_midpoint_quotes_are_centred_on_mid_and_keep_the_floor(bid, ask, half_spread):
+    mid, quote_bid, quote_ask = midpoint_quotes(bid, ask, min_half_spread_bps=2.0)
+    assert mid == (bid + ask) / 2.0
+    assert (quote_bid + quote_ask) / 2.0 == pytest.approx(mid, rel=1e-15)
+    assert quote_ask - mid == pytest.approx(half_spread, rel=1e-9)
+    assert mid - quote_bid == pytest.approx(half_spread, rel=1e-9)
+    assert quote_bid <= bid and quote_ask >= ask
+
+
+def test_replay_quote_is_centred_on_the_last_price(capsys):
+    from scripts import replay_demo
+
+    replay_demo.run(replay_demo.parse_args(["--synthetic"]))
+    out = capsys.readouterr().out
+    quote = re.search(r"^quote: mid=([\d.]+) paper=\[([\d.]+), ([\d.]+)\]$", out, re.MULTILINE)
+    assert quote, out
+    mid, quote_bid, quote_ask = map(float, quote.groups())
+    assert (quote_bid + quote_ask) / 2.0 == pytest.approx(mid, abs=0.01)
+    assert quote_ask - quote_bid == pytest.approx(2 * mid * replay_demo.HALF_SPREAD_BPS / 10_000, abs=0.02)
+    assert re.search(r"^diagnostic: no-jump mean over 8h=[\d.]+ \([+-]\d+\.\d bp vs mid\)$", out, re.MULTILINE), out
 
 
 def test_funding_annual_scales_with_interval():

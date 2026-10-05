@@ -12,9 +12,9 @@ This folder contains the heavy runtime path in C++ and a reflection-based Python
   - rolling return ingestion from ticks
   - Merton jump-diffusion negative log-likelihood over a rolling window
   - periodic online parameter improvement (`sigma`, `lambda`, `mu_j`, `delta_j`)
-- Fair-value computation (as implemented; see section 4):
+- No-jump conditional mean, `no_jump_conditional_mean` (see section 4); `fair_value` is its former name, kept as an alias:
   - `S_0 * exp((r - q - lambda * k) * T)` with `k = exp(mu_j + 0.5 * delta_j^2) - 1`
-  - This is the mean along the no-jump path. Under the compensated Merton SDE,
+  - This is `E[S_T | no jumps in (0, T]]`. Under the compensated Merton SDE,
     the unconditional expectation is `S_0 * exp((r - q) * T)`.
 
 The heavy likelihood path uses an internal standard-normal density implementation to keep the core portable in minimal build environments.
@@ -56,8 +56,9 @@ Python signatures, as actually exposed:
 - `OnlineMertonCalibrator(initial, config=CalibratorConfig())`
 - `update_tick(price, epoch_us)`
 - `maybe_update_params()`
-- `fair_value(s0, q_annual, t_years, r)` — `r` is required; the C++ default `r = 0.0` is not a Python default
-- `fair_value_quantlib(s0, q_annual, t_years, r)` — same
+- `no_jump_conditional_mean(s0, q_annual, t_years, r)` — `r` is required; the C++ default `r = 0.0` is not a Python default
+- `no_jump_conditional_mean_quantlib(s0, q_annual, t_years, r)` — same
+- `fair_value(s0, q_annual, t_years, r)` and `fair_value_quantlib(s0, q_annual, t_years, r)` — the former names: inline aliases in the header with the same arguments and results, bound by reflection like any other public method
 - `params()` — returns a copy of the current `MertonParams` (a snapshot; changing the copy does not change the calibrator)
 - `sample_count()`
 - `calibration_count()`
@@ -70,14 +71,14 @@ Python usage pattern:
 
 1. On each tick: `update_tick(price, ts_us)`
 2. Every N returns: `maybe_update_params()`
-3. For quote comparison: `fair_value(mid, q_annual, T_years, r)` with `r` passed explicitly
+3. Optionally, as a diagnostic: `no_jump_conditional_mean(mid, q_annual, T_years, r)` with `r` passed explicitly (the demos' paper quotes do not use it; they are centred on the market midpoint)
 4. Periodically pull `params()` for logging / persistence
 
 QuantLib integration (for illustration purposes):
 
-- `fair_value_quantlib(...)` builds flat `r`/`q` curves with QuantLib
+- `no_jump_conditional_mean_quantlib(...)` (formerly `fair_value_quantlib`) builds flat `r`/`q` curves with QuantLib
 - computes forward from discount factors (`S0 * Dq / Dr`)
-- applies the same `-λκ` adjustment as `fair_value`, after day-rounding the horizon
+- applies the same `-λκ` adjustment as `no_jump_conditional_mean`, after rounding the horizon to whole days, at least one: an 8-hour horizon is evaluated over one day
 
 ## How `OnlineMertonCalibrator` Works
 
@@ -139,9 +140,9 @@ $$
 
 with $\widehat{\Delta t}$ taken as the median of observed inter-tick intervals (in years).
 
-### 4) Fair value from current online parameters
+### 4) No-jump conditional mean from current online parameters
 
-At any point, `fair_value` uses the current online parameters and returns
+At any point, `no_jump_conditional_mean` (formerly `fair_value`, which remains as an alias) uses the current online parameters and returns
 
 $$
 S_0 \, \exp\bigl((r - q - \lambda\kappa)\,T\bigr),
@@ -156,42 +157,57 @@ compensator in expectation. The implemented formula keeps `-λκ` in the drift,
 so it equals the mean along the no-jump path
 `E[S_T | N_T = 0]` (diffusion only). The difference is about 0.56 bp over an
 8-hour horizon at the default parameters, and can reach a few percent at the
-parameter clamps. This labeling matches the code; the formula is intentionally
-unchanged.
+parameter clamps. The method's name says what the formula computes; the
+formula itself is unchanged.
 
-`fair_value_quantlib` aims at the same quantity via flat QuantLib curves, but
-rounds the horizon to a whole number of days (minimum one), which creates a
-small systematic gap on sub-day horizons.
+It is not a fair value to quote around. Its ratio to the price it is given is
+`exp((r - q - λκ)T)`, which depends only on the parameters, the carry and the
+horizon, not on the market, so its difference from the midpoint is not a
+measure of mispricing and carries no trading signal. The demos print it as a
+labelled diagnostic. In the demos, `T` is the full length of one funding
+interval (8h, 4h or 1h). It does not count down to the next payment, and
+funding payments do not reset the price: funding enters only as the carry `q`.
+
+`no_jump_conditional_mean_quantlib` (formerly `fair_value_quantlib`) aims at
+the same quantity via flat QuantLib curves, but rounds the horizon to a whole
+number of days (minimum one), which creates a small systematic gap on sub-day
+horizons: an 8-hour horizon is evaluated over one day.
 
 So the runtime loop is:
 
 - `update_tick` (every tick)
-- `maybe_update_params` (periodically)
-- `fair_value` (as needed for signal/decision)
+- `maybe_update_params` (periodically): the substantial work, the likelihood over the rolling window
+- `no_jump_conditional_mean` (optional diagnostic): a single exponential
 
-The default local demonstration (`just demo` / `scripts/run_binance_demo.py`) runs this loop on Binance public bookTicker data and prints paper quotes. It places no orders.
+The default local demonstration (`just demo` / `scripts/run_binance_demo.py`) runs this loop on Binance public bookTicker data. It prints illustrative paper quotes centred on the market midpoint, `mid ± max(mid × minimum half-spread, half the market spread)`, alongside the calibrated parameters and the diagnostic, which are analytics and do not move the quotes. It places no orders.
 
-`profitview_merton_signal.py` is an optional legacy ProfitView strategy wrapper for venue-specific live deployment. The supported paths are the Binance demo (`just demo`) or offline `just replay`.
+`profitview_merton_signal.py` is an optional legacy ProfitView strategy wrapper for venue-specific live deployment. It quotes around the midpoint in the same way. Its `merton_theo` topic keeps the earlier `theo` and `diff_bps` fields, as aliases of `no_jump_conditional_mean` and `no_jump_mean_vs_mid_bps`. The supported paths are the Binance demo (`just demo`) or offline `just replay`.
+
+The agreement tests show that the C++, pure-Python, Numba and cppyy paths compute the same numbers. They do not validate the model, the diagnostic or the quotes.
 
 ### Runtime pseudocode
 
 ```text
 init calibrator(params0, config)
 
-for each market tick (price, ts_us):
-    accepted = calibrator.update_tick(price, ts_us)
+for each market tick (bid, ask, ts_us):
+    mid = (bid + ask) / 2
+    accepted = calibrator.update_tick(mid, ts_us)
 
     if accepted:
         updated = calibrator.maybe_update_params()
         if updated:
             params = calibrator.params()
-            # optional: log/store params
+            # optional: log/store params (analytics)
 
+    # Paper quotes: centred on the midpoint; the fitted parameters do not move them.
+    half_spread = max(mid * min_half_spread_bps / 10_000, (ask - bid) / 2)
+    quote_bid, quote_ask = mid - half_spread, mid + half_spread
+
+    # Optional diagnostic over one full funding interval (a fixed length, not a countdown).
     q_annual = funding_to_annual(funding_rate, interval_hours)  # Binance: live 8h/4h/1h
     T_years = interval_hours / (365.25 * 24)
-    fair = calibrator.fair_value(price_or_mid, q_annual, T_years, 0.0)  # r is required in Python
-    diff = fair - market_price
-    # publish signal / apply strategy logic
+    no_jump_mean = calibrator.no_jump_conditional_mean(mid, q_annual, T_years, 0.0)  # r is required in Python
 ```
 
 ## References

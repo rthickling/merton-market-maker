@@ -26,6 +26,8 @@ from scripts.synthetic_ticks import PathSpec, merton_ticks
 PARAM_REL_TOL = 1e-12
 PARAM_ABS_TOL = 1e-15
 NLL_REL_TOL = 1e-12
+NO_JUMP_MEAN_REL_TOL = 1e-13
+HOURS = 1.0 / (365.25 * 24.0)
 
 FIELDS = ("sigma", "lambda_", "mu_j", "delta_j")
 SMALL_CONFIG = {
@@ -51,6 +53,16 @@ def _assert_same_state(compiled, py, where: str) -> None:
         assert math.isclose(a, b, rel_tol=PARAM_REL_TOL, abs_tol=PARAM_ABS_TOL), (
             f"{where}: {name} Numba {a!r} vs Python {b!r}"
         )
+
+
+def _assert_same_no_jump_mean(compiled, py, price: float, where: str) -> None:
+    for t in (1 * HOURS, 8 * HOURS, 24 * HOURS):
+        mean = compiled.no_jump_conditional_mean(price, 0.1, t, 0.0)
+        expected = py.no_jump_conditional_mean(price, 0.1, t, 0.0)
+        assert math.isclose(mean, expected, rel_tol=NO_JUMP_MEAN_REL_TOL, abs_tol=0.0), (
+            f"{where}: no_jump_conditional_mean(t={t!r}) Numba {mean!r} vs Python {expected!r}"
+        )
+        assert compiled.fair_value(price, 0.1, t, 0.0) == mean, where
 
 
 @pytest.mark.numba
@@ -90,6 +102,7 @@ def test_agreement_tick_by_tick_through_repeated_calibrations():
 
     assert compiled.calibration_count() == 13
     assert changed > 0
+    _assert_same_no_jump_mean(compiled, py, price, "after the replay")
 
 
 @pytest.mark.numba
@@ -104,6 +117,7 @@ def test_agreement_at_default_configuration():
             assert compiled.update_tick(price, ts) == py.update_tick(price, ts)
         assert compiled.maybe_update_params() == py.maybe_update_params()
         _assert_same_state(compiled, py, f"calibration {py.calibration_count()}")
+        _assert_same_no_jump_mean(compiled, py, batch[-1][0], f"calibration {py.calibration_count()}")
 
     assert compiled.calibration_count() == 2
     assert compiled.sample_count() == window

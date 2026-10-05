@@ -81,6 +81,10 @@ NB_MODULE(merton_manual_bindings, m) {
     cl.def(nb::init<MertonParams, CalibratorConfig>(), "initial"_a, "config"_a = CalibratorConfig{});
     cl.def("update_tick", &OnlineMertonCalibrator::update_tick, "price"_a, "epoch_us"_a);
     cl.def("maybe_update_params", &OnlineMertonCalibrator::maybe_update_params);
+    cl.def("no_jump_conditional_mean", &OnlineMertonCalibrator::no_jump_conditional_mean, "s0"_a, "q_annual"_a,
+           "t_years"_a, "r"_a);
+    cl.def("no_jump_conditional_mean_quantlib", &OnlineMertonCalibrator::no_jump_conditional_mean_quantlib,
+           "s0"_a, "q_annual"_a, "t_years"_a, "r"_a);
     cl.def("fair_value", &OnlineMertonCalibrator::fair_value, "s0"_a, "q_annual"_a, "t_years"_a, "r"_a);
     cl.def("fair_value_quantlib", &OnlineMertonCalibrator::fair_value_quantlib, "s0"_a, "q_annual"_a,
            "t_years"_a, "r"_a);

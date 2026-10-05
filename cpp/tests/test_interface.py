@@ -6,11 +6,16 @@ import pytest
 
 T_8H = 8.0 / (365.25 * 24.0)
 
+MEAN_METHODS = (
+    "no_jump_conditional_mean",
+    "no_jump_conditional_mean_quantlib",
+    "fair_value",
+    "fair_value_quantlib",
+)
 PUBLIC_METHODS = {
     "update_tick",
     "maybe_update_params",
-    "fair_value",
-    "fair_value_quantlib",
+    *MEAN_METHODS,
     "params",
     "sample_count",
     "calibration_count",
@@ -40,8 +45,7 @@ def test_only_public_methods_are_exposed():
     ("method", "names"),
     [
         ("update_tick", ("price", "epoch_us")),
-        ("fair_value", ("s0", "q_annual", "t_years", "r")),
-        ("fair_value_quantlib", ("s0", "q_annual", "t_years", "r")),
+        *((method, ("s0", "q_annual", "t_years", "r")) for method in MEAN_METHODS),
     ],
 )
 def test_signatures_show_parameter_names(method, names):
@@ -55,18 +59,19 @@ def test_signatures_show_parameter_names(method, names):
 def test_keyword_and_positional_calls_agree(calibrator):
     price, ts = calibrator.feed_ticks()
     cal = calibrator.cal
-    for method in ("fair_value", "fair_value_quantlib"):
+    for method in MEAN_METHODS:
         fn = getattr(cal, method)
         assert fn(price, 0.10, T_8H, 0.0) == fn(s0=price, q_annual=0.10, t_years=T_8H, r=0.0)
     assert cal.update_tick(price=price * 1.0001, epoch_us=ts + 5_000_000) is True
 
 
 @pytest.mark.reflection
-def test_cpp_default_arguments_are_not_python_defaults(calibrator):
-    # fair_value declares r = 0.0 in C++, but the bindings do not generate
+@pytest.mark.parametrize("method", MEAN_METHODS)
+def test_cpp_default_arguments_are_not_python_defaults(calibrator, method):
+    # Each declares r = 0.0 in C++, but the bindings do not generate
     # Python defaults, so r must be passed.
     with pytest.raises(TypeError):
-        calibrator.cal.fair_value(68_000.0, 0.10, T_8H)
+        getattr(calibrator.cal, method)(68_000.0, 0.10, T_8H)
 
 
 @pytest.mark.reflection

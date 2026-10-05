@@ -4,9 +4,10 @@ cppyy reads the declarations in cpp/include/merton_online_calibrator.hpp and
 calls into libmerton_core_shared.so: the core compiled from the same source,
 with the same flags, as the static library inside the nanobind modules (CMake
 option MERTON_BUILD_SHARED_CORE=ON, GCC only). The library exports just the
-five out-of-line public methods. Everything else a call needs, cppyy's
-interpreter compiles on first use: its call wrappers, the header's inline
-accessors and the implicit destructor. warm_up() does that up front.
+five out-of-line public methods, the constructor included. Everything else a
+call needs, cppyy's interpreter compiles on first use: its call wrappers, the
+header's inline accessors, the inline fair_value and fair_value_quantlib
+aliases and the implicit destructor. warm_up() does that up front.
 
 The library is found on sys.path, like the extension modules. MertonParams
 gains a `lambda_` alias for its `lambda` member, as in the nanobind modules, so
@@ -62,7 +63,7 @@ def warm_up() -> None:
     cal.update_tick(100.0, 1)
     cal.update_tick(100.0, 2)
     cal.maybe_update_params()
-    cal.fair_value(100.0, 0.0, 1e-3, 0.0)
+    cal.no_jump_conditional_mean(100.0, 0.0, 1e-3, 0.0)
     cal.params()
     cal.sample_count()
     cal.calibration_count()

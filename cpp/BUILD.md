@@ -25,7 +25,7 @@ To demonstrate the calibrator on live public market data (no ProfitView):
 just demo
 ```
 
-`just demo` builds the selected combination, then runs `scripts/run_binance_demo.py` against Binance USD-M futures. Default `MERTON_SYMBOL=BTCUSDT`. Selectable perps: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `XRPUSDT`, `XAUUSDT` (`MERTON_SYMBOL=XAUUSDT just demo`). `lastFundingRate` is annualized with that contract’s live `fundingIntervalHours` (8, 4, or 1); fair-value `T` is one interval. Also `MERTON_MARKET=spot|futures` and optional `MERTON_MARKET_MAKER_DATA_PATH` (CSV/Parquet `time` + `price`) to warm the rolling window before the websocket starts.
+`just demo` builds the selected combination, then runs `scripts/run_binance_demo.py` against Binance USD-M futures. Default `MERTON_SYMBOL=BTCUSDT`. Selectable perps: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `XRPUSDT`, `XAUUSDT` (`MERTON_SYMBOL=XAUUSDT just demo`). Paper quotes are centred on the market midpoint. `lastFundingRate` is annualized with that contract’s live `fundingIntervalHours` (8, 4, or 1) and used only as the carry in the no-jump conditional mean diagnostic, whose `T` is one full interval. Also `MERTON_MARKET=spot|futures` and optional `MERTON_MARKET_MAKER_DATA_PATH` (CSV/Parquet `time` + `price`) to warm the rolling window before the websocket starts.
 
 To test every supported compiler/binding combination (reuses Docker image layers if present):
 

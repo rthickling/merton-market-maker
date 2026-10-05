@@ -184,12 +184,19 @@ class OnlineMertonCalibrator:
         self._params = best
         return changed
 
-    def fair_value(self, s0: float, q_annual: float, t_years: float, r: float) -> float:
-        """S0*exp((r - q - λκ)T); same formula as the C++ method (not unconditional E[S_T])."""
+    def no_jump_conditional_mean(self, s0: float, q_annual: float, t_years: float, r: float) -> float:
+        """E[S_T | no jumps in (0, T]] = S0*exp((r - q - λκ)T), as in the C++ method.
+
+        Not the unconditional E[S_T], and not a fair value to quote around.
+        """
         p = self._params
         k = jump_compensator(p.mu_j, p.delta_j)
         drift = r - q_annual - p.lambda_ * k
         return s0 * math.exp(drift * t_years)
+
+    def fair_value(self, s0: float, q_annual: float, t_years: float, r: float) -> float:
+        """Former name of no_jump_conditional_mean, kept for existing callers: same arguments, same result."""
+        return self.no_jump_conditional_mean(s0, q_annual, t_years, r)
 
     def params(self) -> MertonParams:
         return replace(self._params)

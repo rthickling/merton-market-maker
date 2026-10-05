@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Stream Binance bookTicker quotes into the C++ Merton calibrator.
 
-No ProfitView, no order placement. Prints fair value and paper bid/ask.
+No ProfitView, no order placement. Prints illustrative paper quotes centred on
+the market midpoint, the online calibration, and, as a diagnostic, the no-jump
+conditional mean over one funding interval. The fitted parameters are analytics;
+the quotes do not use them.
 """
 from __future__ import annotations
 
@@ -34,11 +37,12 @@ from scripts.binance_perps import (
 from scripts.history import default_data_path, load_price_ticks, resample_last_price, warmup_calibrator
 from scripts.merton_runtime import (
     DEFAULT_FUNDING_INTERVAL_HOURS,
+    MIN_HALF_SPREAD_BPS,
     QL_MONITOR_EVERY_N_QUOTES,
     build_calibrator,
     funding_annual,
     horizon_years,
-    paper_quotes,
+    midpoint_quotes,
     tick_calibrator,
 )
 
@@ -126,6 +130,11 @@ async def run(args: argparse.Namespace) -> None:
     quote_count = 0
     url = ws_url(symbol, args.market)
     print(f"perps: {', '.join(DEMO_PERPS)}", file=sys.stderr)
+    print(
+        f"paper quotes: mid +/- max({MIN_HALF_SPREAD_BPS:g} bp of mid, half the market spread); no orders are "
+        "placed. The fitted parameters and the no-jump mean are analytics and do not move the quotes.",
+        file=sys.stderr,
+    )
     print(f"connecting {url}", file=sys.stderr)
 
     async for ws in websockets.connect(url, ping_interval=20):
@@ -140,7 +149,7 @@ async def run(args: argparse.Namespace) -> None:
                         t_years = horizon_years(interval_hours)
                         last_funding_ts = now
                         print(
-                            f"{symbol} funding interval={interval_hours:g}h "
+                            f"{symbol} funding (context) interval={interval_hours:g}h "
                             f"rate={funding_rate:.8f} next={fmt_next_funding(snap.next_funding_time_ms)}",
                             file=sys.stderr,
                         )
@@ -152,31 +161,31 @@ async def run(args: argparse.Namespace) -> None:
                 ask = float(msg.get("a") or 0)
                 if not bid or not ask:
                     continue
-                mid = (bid + ask) / 2.0
+                mid, quote_bid, quote_ask = midpoint_quotes(bid, ask)
                 event_ms = int(msg.get("E") or (now * 1000))
                 tick_calibrator(calibrator, mid, event_ms * 1000)
-                q_annual = (
-                    funding_annual(funding_rate, interval_hours) if args.market == "futures" else 0.0
-                )
-                theo = calibrator.fair_value(mid, q_annual, t_years, 0.0)
-                quote_bid, quote_ask = paper_quotes(theo, bid, ask)
                 quote_count += 1
                 if quote_count % max(args.print_every, 1) != 0:
                     continue
-                diff_bps = ((theo - mid) / mid) * 10000 if mid else 0.0
+                q_annual = (
+                    funding_annual(funding_rate, interval_hours) if args.market == "futures" else 0.0
+                )
+                no_jump_mean = calibrator.no_jump_conditional_mean(mid, q_annual, t_years, 0.0)
+                vs_mid_bps = ((no_jump_mean - mid) / mid) * 10000 if mid else 0.0
                 p = calibrator.params()
                 print(
-                    f"{symbol} {interval_hours:g}h mid={fmt_px(mid)} theo={fmt_px(theo)} "
-                    f"diff={diff_bps:.1f}bps paper=[{fmt_px(quote_bid)}, {fmt_px(quote_ask)}] "
-                    f"sigma={p.sigma:.4f} lambda={getattr(p, 'lambda'):.3f}"
+                    f"{symbol} mid={fmt_px(mid)} paper=[{fmt_px(quote_bid)}, {fmt_px(quote_ask)}] "
+                    f"| sigma={p.sigma:.4f} lambda={getattr(p, 'lambda'):.3f} "
+                    f"| diagnostic: no-jump mean over {interval_hours:g}h={fmt_px(no_jump_mean)} "
+                    f"({vs_mid_bps:+.1f} bp vs mid)"
                 )
                 if QL_MONITOR_EVERY_N_QUOTES > 0 and quote_count % QL_MONITOR_EVERY_N_QUOTES == 0:
                     try:
-                        theo_ql = calibrator.fair_value_quantlib(mid, q_annual, t_years, 0.0)
-                        gap_bps = ((theo_ql - theo) / mid) * 10000 if mid else 0.0
+                        ql_mean = calibrator.no_jump_conditional_mean_quantlib(mid, q_annual, t_years, 0.0)
+                        gap_bps = ((ql_mean - no_jump_mean) / mid) * 10000 if mid else 0.0
                         print(
-                            f"{symbol} ql_monitor fast={fmt_px(theo)} ql={fmt_px(theo_ql)} "
-                            f"gap={gap_bps:.2f}bps"
+                            f"{symbol} ql_monitor (diagnostic) no-jump mean: analytic={fmt_px(no_jump_mean)} "
+                            f"quantlib={fmt_px(ql_mean)} (horizon rounded to whole days) gap={gap_bps:.2f}bp"
                         )
                     except Exception as exc:
                         print(f"QuantLib monitor failed: {exc}", file=sys.stderr)

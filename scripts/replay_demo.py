@@ -5,6 +5,10 @@ Default input is a seeded synthetic Merton path. Pass --data-path or set
 MERTON_MARKET_MAKER_DATA_PATH to replay recorded CSV/Parquet instead.
 Floats are printed with fixed formats so unchanged input yields byte-identical
 output. Intended to be started from the repository root, e.g. `cd cpp && just replay`.
+
+The closing paper quote is centred on the last price, the replay's midpoint;
+with no book to replay, the minimum half-spread sets its width. The no-jump
+conditional mean is printed as a labelled diagnostic, not as a quote input.
 """
 
 from __future__ import annotations
@@ -21,9 +25,10 @@ from scripts.merton_runtime import (
     CPP_N_MAX,
     CPP_UPDATE_EVERY_N_RETURNS,
     CPP_WINDOW_SIZE,
+    T_HOURS,
     T_YEARS,
     build_calibrator,
-    paper_quotes,
+    midpoint_quotes,
 )
 from scripts.synthetic_ticks import PathSpec, merton_ticks
 
@@ -142,20 +147,18 @@ def run(args: argparse.Namespace) -> None:
             print(f"... ({omitted} more parameter changes)")
         print(f"tick {tick_i:>6}  mid={fmt_px(price)}  {fmt_params(params)}")
 
-    mid = ticks[-1][0]
-    theo = cal.fair_value(mid, 0.0, T_YEARS, 0.0)
-    quote_bid, quote_ask = paper_quotes(theo, mid, mid, min_half_spread_bps=HALF_SPREAD_BPS)
-    diff_bps = ((theo - mid) / mid) * 10000.0 if mid else 0.0
+    last_price = ticks[-1][0]
+    mid, quote_bid, quote_ask = midpoint_quotes(last_price, last_price, min_half_spread_bps=HALF_SPREAD_BPS)
+    no_jump_mean = cal.no_jump_conditional_mean(mid, 0.0, T_YEARS, 0.0)
+    vs_mid_bps = ((no_jump_mean - mid) / mid) * 10000.0 if mid else 0.0
     print()
     print(
         f"final: ticks={len(ticks)} samples={cal.sample_count()} "
         f"calibrations={cal.calibration_count()} changed={len(events)}"
     )
     print(f"params: {fmt_params(cal.params())}")
-    print(
-        f"quote: mid={fmt_px(mid)} theo={fmt_px(theo)} diff={diff_bps:+.1f}bps "
-        f"paper=[{fmt_px(quote_bid)}, {fmt_px(quote_ask)}]"
-    )
+    print(f"quote: mid={fmt_px(mid)} paper=[{fmt_px(quote_bid)}, {fmt_px(quote_ask)}]")
+    print(f"diagnostic: no-jump mean over {T_HOURS:g}h={fmt_px(no_jump_mean)} ({vs_mid_bps:+.1f} bp vs mid)")
 
 
 def main() -> None:

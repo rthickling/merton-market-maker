@@ -41,10 +41,20 @@ public:
     // Returns true if parameters were updated.
     MERTON_API bool maybe_update_params();
 
-    // S0*exp((r - q - λκ)T), κ = exp(μ_J + δ_J²/2) - 1. Not the unconditional E[S_T].
-    MERTON_API double fair_value(double s0, double q_annual, double t_years, double r = 0.0) const;
-    // Same quantity via QuantLib flat curves (day-rounded horizon; see THEORY.md).
-    MERTON_API double fair_value_quantlib(double s0, double q_annual, double t_years, double r = 0.0) const;
+    // E[S_T | no jumps in (0, T]] = S0*exp((r - q - λκ)T), κ = exp(μ_J + δ_J²/2) - 1.
+    // Not the unconditional E[S_T], and not a fair value to quote around.
+    MERTON_API double no_jump_conditional_mean(double s0, double q_annual, double t_years, double r = 0.0) const;
+    // Same quantity via QuantLib flat curves, with T rounded to whole days, at least one (see THEORY.md).
+    MERTON_API double no_jump_conditional_mean_quantlib(double s0, double q_annual, double t_years,
+                                                        double r = 0.0) const;
+
+    // Former names, kept for existing callers: same arguments, same results.
+    double fair_value(double s0, double q_annual, double t_years, double r = 0.0) const {
+        return no_jump_conditional_mean(s0, q_annual, t_years, r);
+    }
+    double fair_value_quantlib(double s0, double q_annual, double t_years, double r = 0.0) const {
+        return no_jump_conditional_mean_quantlib(s0, q_annual, t_years, r);
+    }
 
     const MertonParams& params() const { return params_; }
     std::size_t sample_count() const { return returns_.size(); }

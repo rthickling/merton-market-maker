@@ -10,8 +10,9 @@ can differ by a few ulps between platforms. Parameters therefore use a
 relative tolerance of 1e-12 (about 4,500 ulps), which is still more than eight
 orders of magnitude below the smallest step the coordinate search takes
 (relative 1e-4 or more), so a differing decision cannot hide inside it. The
-absolute term covers mu_j near zero. fair_value is one exp and a few products,
-hence 1e-13. A failure is a divergence to investigate, not a tolerance to widen.
+absolute term covers mu_j near zero. no_jump_conditional_mean is one exp and a
+few products, hence 1e-13. A failure is a divergence to investigate, not a
+tolerance to widen.
 """
 
 import math
@@ -28,7 +29,7 @@ from scripts.synthetic_ticks import PathSpec, merton_ticks
 
 PARAM_REL_TOL = 1e-12
 PARAM_ABS_TOL = 1e-15
-FAIR_VALUE_REL_TOL = 1e-13
+NO_JUMP_MEAN_REL_TOL = 1e-13
 
 FIELDS = ("sigma", "lambda_", "mu_j", "delta_j")
 START = {"sigma": 0.44, "lambda_": 20.0, "mu_j": 0.003, "delta_j": 0.01}
@@ -68,13 +69,15 @@ def _assert_same_state(cpp, py, where: str) -> None:
         )
 
 
-def _assert_same_fair_value(cpp, py, price: float, where: str) -> None:
+def _assert_same_no_jump_mean(cpp, py, price: float, where: str) -> None:
     for t in HORIZONS:
-        a = cpp.fair_value(price, 0.1, t, 0.0)
-        b = py.fair_value(price, 0.1, t, 0.0)
-        assert math.isclose(a, b, rel_tol=FAIR_VALUE_REL_TOL, abs_tol=0.0), (
-            f"{where}: fair_value(t={t!r}) C++ {a!r} vs Python {b!r}"
+        a = cpp.no_jump_conditional_mean(price, 0.1, t, 0.0)
+        b = py.no_jump_conditional_mean(price, 0.1, t, 0.0)
+        assert math.isclose(a, b, rel_tol=NO_JUMP_MEAN_REL_TOL, abs_tol=0.0), (
+            f"{where}: no_jump_conditional_mean(t={t!r}) C++ {a!r} vs Python {b!r}"
         )
+        assert cpp.fair_value(price, 0.1, t, 0.0) == a, where
+        assert py.fair_value(price, 0.1, t, 0.0) == b, where
 
 
 def test_reference_defaults_match_cpp():
@@ -99,7 +102,7 @@ def test_agreement_tick_by_tick_through_repeated_calibrations():
         assert cpp_changed == py.maybe_update_params(), where
         changed += cpp_changed
         _assert_same_state(cpp, py, where)
-        _assert_same_fair_value(cpp, py, price, where)
+        _assert_same_no_jump_mean(cpp, py, price, where)
 
     assert cpp.calibration_count() == 13
     assert changed > 0
@@ -118,7 +121,7 @@ def test_agreement_at_default_configuration():
         assert cpp.maybe_update_params() == py.maybe_update_params()
         where = f"calibration {cpp.calibration_count()}"
         _assert_same_state(cpp, py, where)
-        _assert_same_fair_value(cpp, py, batch[-1][0], where)
+        _assert_same_no_jump_mean(cpp, py, batch[-1][0], where)
 
     assert cpp.calibration_count() == 2
     assert cpp.sample_count() == window

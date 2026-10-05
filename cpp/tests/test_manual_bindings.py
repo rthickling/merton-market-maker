@@ -59,6 +59,8 @@ def test_same_names_and_signatures():
     assert surface == _surface(reflected)
     assert "OnlineMertonCalibrator.calibration_count" in surface
     assert "MertonParams.lambda" in surface
+    for name in ("no_jump_conditional_mean", "no_jump_conditional_mean_quantlib", "fair_value", "fair_value_quantlib"):
+        assert f"OnlineMertonCalibrator.{name}" in surface
 
 
 def test_modules_keep_separate_types():
@@ -75,9 +77,13 @@ def test_same_repr():
 @BOTH_MODULES
 def test_argument_handling(module):
     cal = module.OnlineMertonCalibrator(module.MertonParams(), config=module.CalibratorConfig())
-    assert cal.fair_value(s0=100.0, q_annual=0.1, t_years=0.5, r=0.02) == cal.fair_value(100.0, 0.1, 0.5, 0.02)
-    with pytest.raises(TypeError):
-        cal.fair_value(100.0, 0.1, 0.5)
+    mean = cal.no_jump_conditional_mean(100.0, 0.1, 0.5, 0.02)
+    assert cal.no_jump_conditional_mean(s0=100.0, q_annual=0.1, t_years=0.5, r=0.02) == mean
+    assert cal.fair_value(s0=100.0, q_annual=0.1, t_years=0.5, r=0.02) == mean
+    assert cal.fair_value_quantlib(100.0, 0.1, 0.5, 0.02) == cal.no_jump_conditional_mean_quantlib(100.0, 0.1, 0.5, 0.02)
+    for method in ("no_jump_conditional_mean", "fair_value"):
+        with pytest.raises(TypeError):
+            getattr(cal, method)(100.0, 0.1, 0.5)
     with pytest.raises(TypeError):
         cal.update_tick("100", 1)
 
@@ -111,5 +117,7 @@ def test_same_results_on_the_same_ticks():
         assert a.update_tick(price, ts) == b.update_tick(price, ts)
         assert a.maybe_update_params() == b.maybe_update_params()
         assert [getattr(a.params(), f) for f in PARAM_FIELDS] == [getattr(b.params(), f) for f in PARAM_FIELDS]
-        assert a.fair_value(price, 0.1, HOUR, 0.0) == b.fair_value(price, 0.1, HOUR, 0.0)
+        mean = a.no_jump_conditional_mean(price, 0.1, HOUR, 0.0)
+        assert b.no_jump_conditional_mean(price, 0.1, HOUR, 0.0) == mean
+        assert a.fair_value(price, 0.1, HOUR, 0.0) == b.fair_value(price, 0.1, HOUR, 0.0) == mean
     assert a.calibration_count() == b.calibration_count() > 0

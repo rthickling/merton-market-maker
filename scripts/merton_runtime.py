@@ -1,7 +1,9 @@
 """Shared C++ calibrator setup and paper-quote helpers.
 
-Used by the local Binance demo and the optional ProfitView strategy wrapper.
-Does not import ProfitView.
+Used by the local Binance demo, the offline replay and the optional ProfitView
+strategy wrapper. Does not import ProfitView. The paper quotes are centred on
+the market midpoint; the calibrated parameters and the no-jump conditional mean
+are analytics and do not move them.
 """
 from __future__ import annotations
 
@@ -12,7 +14,7 @@ from typing import Any, Optional
 
 HOURS_PER_YEAR = 365.25 * 24
 DEFAULT_FUNDING_INTERVAL_HOURS = 8.0
-T_HOURS = DEFAULT_FUNDING_INTERVAL_HOURS  # typical perpetual funding horizon (8h)
+T_HOURS = DEFAULT_FUNDING_INTERVAL_HOURS  # one full 8h funding interval: a fixed horizon, not a countdown
 T_YEARS = T_HOURS / HOURS_PER_YEAR
 MIN_HALF_SPREAD_BPS = float(os.getenv("MERTON_MIN_HALF_SPREAD_BPS", "2.0"))
 QL_MONITOR_EVERY_N_QUOTES = int(os.getenv("MERTON_QL_MONITOR_EVERY_N_QUOTES", "120"))
@@ -33,7 +35,7 @@ def seed_params_from_env() -> dict[str, float]:
     }
 
 
-def merton_theoretical(
+def no_jump_conditional_mean(
     S0: float,
     sigma: float,
     lam: float,
@@ -43,14 +45,25 @@ def merton_theoretical(
     T_years: float,
     r: float = 0.0,
 ) -> float:
-    """S0*exp((r - q - λk)*T), k = exp(μ_J + δ_J²/2) - 1; same as OnlineMertonCalibrator.fair_value."""
+    """E[S_T | no jumps in (0, T]] = S0*exp((r - q - λk)*T), k = exp(μ_J + δ_J²/2) - 1.
+
+    Same as OnlineMertonCalibrator.no_jump_conditional_mean. A diagnostic, not a
+    fair value to quote around.
+    """
     k = math.exp(mu_j + 0.5 * delta_j**2) - 1
     drift = r - q_annual - lam * k
     return S0 * math.exp(drift * T_years)
 
 
+merton_theoretical = no_jump_conditional_mean  # former name, kept for existing callers
+
+
 def horizon_years(interval_hours: float = DEFAULT_FUNDING_INTERVAL_HOURS) -> float:
-    """Pricing horizon T matching one funding interval."""
+    """Horizon T for the no-jump diagnostic: the full length of one funding interval.
+
+    The length is fixed. It is not the time left until the next funding payment,
+    and funding payments do not reset the price.
+    """
     hours = float(interval_hours)
     if hours <= 0:
         raise ValueError("funding interval hours must be positive")
@@ -61,18 +74,37 @@ def funding_annual(
     rate_per_interval: float,
     interval_hours: float = DEFAULT_FUNDING_INTERVAL_HOURS,
 ) -> float:
-    """Annualize a per-interval funding rate (Binance lastFundingRate is per current interval)."""
+    """Annualize a per-interval funding rate (Binance lastFundingRate is per current interval).
+
+    The demos use it as context: the carry q in the no-jump diagnostic. The quotes do not use it.
+    """
     hours = float(interval_hours)
     if hours <= 0:
         raise ValueError("funding interval hours must be positive")
     return float(rate_per_interval) * (HOURS_PER_YEAR / hours)
 
 
-def paper_quotes(theo: float, mkt_bid: float, mkt_ask: float, min_half_spread_bps: float = MIN_HALF_SPREAD_BPS) -> tuple[float, float]:
-    min_half = theo * (min_half_spread_bps / 10000.0)
+def paper_quotes(
+    reference_price: float, mkt_bid: float, mkt_ask: float, min_half_spread_bps: float = MIN_HALF_SPREAD_BPS
+) -> tuple[float, float]:
+    """Symmetric paper bid and ask around reference_price.
+
+    The half-spread is the larger of min_half_spread_bps of reference_price and
+    half the market spread. The demos pass the market midpoint (midpoint_quotes).
+    """
+    min_half = reference_price * (min_half_spread_bps / 10000.0)
     mkt_half = max((mkt_ask - mkt_bid) / 2.0, 0.0)
     half_spread = max(min_half, mkt_half)
-    return theo - half_spread, theo + half_spread
+    return reference_price - half_spread, reference_price + half_spread
+
+
+def midpoint_quotes(
+    mkt_bid: float, mkt_ask: float, min_half_spread_bps: float = MIN_HALF_SPREAD_BPS
+) -> tuple[float, float, float]:
+    """(mid, paper bid, paper ask): paper_quotes centred on the market midpoint."""
+    mid = (mkt_bid + mkt_ask) / 2.0
+    quote_bid, quote_ask = paper_quotes(mid, mkt_bid, mkt_ask, min_half_spread_bps)
+    return mid, quote_bid, quote_ask
 
 
 def build_calibrator(moc: Any, seeds: Optional[dict[str, float]] = None) -> Any:

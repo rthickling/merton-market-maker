@@ -12,6 +12,13 @@ To deploy on ProfitView:
 Set `MERTON_INSTRUMENT_API_URL` to your venue's REST base for instrument/funding queries
 (JSON array with `fundingRate` and optional `markPrice`). Set `PROFITVIEW_SIGNAL_VENUE`
 to the venue id ProfitView expects in `signal()`.
+
+The quotes are centred on the market midpoint: mid +/- max(MERTON_MIN_HALF_SPREAD_BPS
+of mid, half the market spread). The calibrated parameters and the no-jump conditional
+mean over 8h are analytics and do not move them; funding enters only that diagnostic,
+as the carry. The `merton_theo` topic keeps its earlier fields: `theo` and `diff_bps`
+are aliases of `no_jump_conditional_mean` and `no_jump_mean_vs_mid_bps`, a diagnostic,
+not a mispricing. `quote_reference` names the quote centre.
 """
 from __future__ import annotations
 
@@ -37,7 +44,7 @@ from scripts.merton_runtime import (
     T_YEARS,
     build_calibrator,
     funding_annual,
-    paper_quotes,
+    midpoint_quotes,
     tick_calibrator,
 )
 
@@ -88,7 +95,7 @@ class Signals(Link):
         mkt_bid, mkt_ask = data.get("bid", [0, 0])[0], data.get("ask", [0, 0])[0]
         if not mkt_bid or not mkt_ask:
             return
-        mid = (mkt_bid + mkt_ask) / 2
+        mid, quote_bid, quote_ask = midpoint_quotes(mkt_bid, mkt_ask)
         epoch_ms = int(data.get("time", self.epoch_now))
         try:
             tick_calibrator(self._cpp_calibrator, mid, epoch_ms * 1000)
@@ -97,20 +104,20 @@ class Signals(Link):
             return
         with self._lock:
             q_annual = funding_annual(self._funding_rate)
-        theo = self._cpp_calibrator.fair_value(mid, q_annual, T_YEARS, 0.0)
-        quote_bid, quote_ask = paper_quotes(theo, mkt_bid, mkt_ask)
-        diff_bps = ((theo - mid) / mid) * 10000 if mid else 0
+        no_jump_mean = self._cpp_calibrator.no_jump_conditional_mean(mid, q_annual, T_YEARS, 0.0)
+        vs_mid_bps = ((no_jump_mean - mid) / mid) * 10000 if mid else 0
         logger.info(
-            f"{sym} mid={mid:.2f} theo={theo:.2f} diff={theo - mid:.2f} ({diff_bps:.1f} bps) "
-            f"quote=[{quote_bid:.2f}, {quote_ask:.2f}]"
+            f"{sym} mid={mid:.2f} quote=[{quote_bid:.2f}, {quote_ask:.2f}] "
+            f"| diagnostic: no-jump mean over 8h={no_jump_mean:.2f} ({vs_mid_bps:+.1f} bp vs mid)"
         )
         self._quote_count += 1
         if QL_MONITOR_EVERY_N_QUOTES > 0 and (self._quote_count % QL_MONITOR_EVERY_N_QUOTES == 0):
             try:
-                theo_ql = self._cpp_calibrator.fair_value_quantlib(mid, q_annual, T_YEARS, 0.0)
-                gap_bps = ((theo_ql - theo) / mid) * 10000 if mid else 0.0
+                ql_mean = self._cpp_calibrator.no_jump_conditional_mean_quantlib(mid, q_annual, T_YEARS, 0.0)
+                gap_bps = ((ql_mean - no_jump_mean) / mid) * 10000 if mid else 0.0
                 logger.info(
-                    f"{sym} ql_monitor fast={theo:.2f} ql={theo_ql:.2f} gap={theo_ql-theo:.2f} ({gap_bps:.2f} bps)"
+                    f"{sym} ql_monitor (diagnostic) no-jump mean: analytic={no_jump_mean:.2f} "
+                    f"quantlib={ql_mean:.2f} (horizon rounded to whole days) gap={gap_bps:.2f}bp"
                 )
             except Exception as e:
                 logger.warning(f"QuantLib monitor failed: {e}")
@@ -121,9 +128,13 @@ class Signals(Link):
             {
                 "sym": sym,
                 "market": mid,
-                "theo": theo,
-                "diff_bps": diff_bps,
+                "quote_reference": "mid",
                 "quote_bid": quote_bid,
                 "quote_ask": quote_ask,
+                "no_jump_conditional_mean": no_jump_mean,
+                "no_jump_mean_vs_mid_bps": vs_mid_bps,
+                # Earlier names of the two diagnostic fields, kept for existing consumers.
+                "theo": no_jump_mean,
+                "diff_bps": vs_mid_bps,
             },
         )

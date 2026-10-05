@@ -3,6 +3,8 @@
 # Merton Market Maker: C++26 Reflection + Python Bindings
 **Solving the Speed-to-Market vs Speed-to-Book Tension in Algorithmic Trading.**
 
+An online jump-diffusion calibration example with an illustrative quoting demo: a C++ calibrator refits a Merton jump-diffusion model to a rolling window of prices, and C++26 reflection generates its Python bindings.
+
 ---
 
 ⚠️ **The "No Alpha" Disclaimer**
@@ -10,6 +12,7 @@
 This project is an engineering demonstration. The included Merton Jump Diffusion (MJD) algorithm is a standard, textbook model used to provide a real-world context.
 * This is not a money-printing bot.
 * It exposes no novel alpha.
+* The demo's paper quotes are centred on the market midpoint; the fitted parameters are analytics and do not move them.
 * The value is in the infrastructure, not the strategy.
 
 ---
@@ -21,7 +24,7 @@ You need Docker (runnable without `sudo`) on an x86-64 machine, and [`just`](htt
 git clone https://github.com/rthickling/merton-market-maker.git
 cd merton-market-maker/cpp
 just test   # first run builds the image (about 30 minutes on 4 cores), then builds and tests
-just demo   # stream live Binance quotes into the C++ calibrator (paper quotes only)
+just demo   # stream live Binance quotes into the C++ calibrator (paper quotes, no orders)
 ```
 
 After the first build, `just api`, `just replay` and `just bench` run offline ([details](#offline-once-the-image-exists)). [BUILD](cpp/BUILD.md) covers the other compilers, bindings and Python versions.
@@ -62,7 +65,7 @@ NB_MODULE(merton_online_calibrator, m) { // Using `nanobind`
 }
 ```
 
-A public method added to an already-registered C++ type is then available from Python without a per-method binding edit. Parameter names come from reflection. C++ default arguments are not turned into Python defaults, and the extension does not release the GIL.
+A public method added to an already-registered C++ type is then available from Python without a per-method binding edit. For example, renaming `fair_value` to `no_jump_conditional_mean`, with the old name kept as an inline alias, needed no change to the reflected bindings; only the hand-written comparison module needed new lines. Parameter names come from reflection. C++ default arguments are not turned into Python defaults, and the extension does not release the GIL.
 
 The reflection operator `^^T` converts a type into a reflected meta-object, and the splicer `[:m:]` converts reflected members back into run-time expressions.
 
@@ -83,12 +86,16 @@ calibrator.maybe_update_params()  # refits once enough returns have arrived
 
 p = calibrator.params()
 print(f"sigma={p.sigma}, lambda={p.lambda_}, samples={calibrator.sample_count()}")
-print(f"fair value, 8h: {calibrator.fair_value(68020.0, 0.0, 8 / (365.25 * 24), 0.0):.2f}")
+# A model diagnostic, E[S_T | no jumps], not a fair value; fair_value is its former name.
+t_years = 8 / (365.25 * 24)
+print(f"no-jump conditional mean, 8h: {calibrator.no_jump_conditional_mean(68020.0, 0.0, t_years, 0.0):.2f}")
 ```
 
 ---
 ## Why Merton Jump Diffusion?
 I chose the MJD model because its math is heavy. It requires infinite-series-style mixture summations that would be much slower in pure Python. It illustrates the "Speed-to-Book" need for compiled math, while the high-level trading logic still benefits from Python's "Speed-to-Market."
+
+The substantial work is the calibration: each refit evaluates that mixture likelihood over the whole rolling window many times. The no-jump conditional mean the demo prints afterwards is a single exponential.
 
 ## Technical Stack
 C++26 reflection is built with either released GCC 16.2 and libstdc++ or the pinned Bloomberg Clang P2996 fork and libc++. Both toolchains support the nanobind and pybind11 backends and run entirely in pinned `linux/amd64` Docker environments.
@@ -100,7 +107,7 @@ cd cpp
 just demo
 ```
 
-This builds the default GCC/nanobind/CPython 3.14 module and streams Binance USD-M bookTicker quotes into the C++ calibrator (paper quotes only). Default symbol is `BTCUSDT`. Selectable perps: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `XRPUSDT`, `XAUUSDT`. Funding is annualized from each contract’s live interval (8h/4h/1h). Optional historical warmup: set `MERTON_MARKET_MAKER_DATA_PATH` to a CSV/Parquet directory. ProfitView is not required.
+This builds the default GCC/nanobind/CPython 3.14 module and streams Binance USD-M bookTicker quotes into the C++ calibrator. It places no orders. Its paper quotes are centred on the market midpoint: mid ± the larger of 2 bp of mid (`MERTON_MIN_HALF_SPREAD_BPS`) and half the market spread. The calibrated parameters are analytics and do not move the quotes. Each line also shows, as a labelled diagnostic, the no-jump conditional mean over one funding interval: a model quantity that depends only on the parameters and the carry, not a fair value, mispricing or signal. Funding is context: the live rate, annualized from each contract’s interval (8h/4h/1h), enters only that diagnostic, and the horizon is the interval’s full length, not the time to the next payment. Default symbol is `BTCUSDT`. Selectable perps: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `XRPUSDT`, `XAUUSDT`. Optional historical warmup: set `MERTON_MARKET_MAKER_DATA_PATH` to a CSV/Parquet directory. ProfitView is not required.
 
 ```bash
 just test                 # build and pytest the selected toolchain
@@ -128,12 +135,12 @@ Supported combinations: GCC 16.2 (libstdc++) and the pinned clang-p2996 fork (li
 Limits of the reflection layer, as built:
 
 - classes and constructors are registered explicitly;
-- Python defaults are not generated (omitting `r` from `fair_value` raises `TypeError`);
+- Python defaults are not generated (omitting `r` from `no_jump_conditional_mean`, or from its former name `fair_value`, raises `TypeError`);
 - calls hold the GIL; the calibrator is mutable and not synchronised across threads.
 
 `tests/test_reference_agreement.py` compares the C++ calibrator with a line-by-line Python translation on the same seeded ticks, and `tests/test_numba_agreement.py` compares that translation with `scripts/merton_numba.py`, the same class with its likelihood compiled by Numba. `tests/test_cppyy_agreement.py` checks that `scripts/merton_cppyy.py`, which calls the same compiled C++ through cppyy, returns exactly what the nanobind module returns. Matching results show the implementations are consistent with each other. They do not validate the financial model.
 
-`just bench` times that same algorithm in readable Python, in that Python with its likelihood compiled by Numba, and in C++ behind reflected bindings, equivalent hand-written nanobind bindings, and cppyy, which builds its bindings from the header at run time. The three C++ variants run the same core, compiled from the same source with the same flags (the benchmark checks that the machine code is identical), so they differ only in how Python calls it. The benchmark needs the GCC image, the only one with cppyy. A speedup is for this algorithm on the machine that ran the benchmark. There is no comparison with NumPy vectorisation, Cython or Pythran. The report also says whether cheap calls through the reflected module or through cppyy were slower than through the hand-written module by more than the run-to-run spread. On the machine used while writing these notes (AMD Ryzen 7 PRO 7840U, CPython 3.14.8 built without profile-guided or link-time optimisation, GCC 16.2, nanobind 2.12.0, Numba 0.68.0, cppyy 3.5.0), one calibration was about 35× faster in C++ than in the Python reference, through any of the three bindings, and about 37× faster with Numba, which compiles for the host CPU where the C++ build targets generic x86-64. No cheap call was slower through the reflected bindings by more than that spread; through cppyy, each cheap call took about 10–20 ns longer than through the hand-written module. Rerun `just bench` before quoting a number.
+`just bench` times that same algorithm in readable Python, in that Python with its likelihood compiled by Numba, and in C++ behind reflected bindings, equivalent hand-written nanobind bindings, and cppyy, which builds its bindings from the header at run time. The three C++ variants run the same core, compiled from the same source with the same flags (the benchmark checks that the machine code is identical), so they differ only in how Python calls it. The benchmark needs the GCC image, the only one with cppyy. A speedup is for this algorithm on the machine that ran the benchmark. There is no comparison with NumPy vectorisation, Cython or Pythran. The report also says whether cheap calls through the reflected module or through cppyy were slower than through the hand-written module by more than the run-to-run spread. On the machine used while writing these notes (AMD Ryzen 7 PRO 7840U, CPython 3.14.8 built without profile-guided or link-time optimisation, GCC 16.2, nanobind 2.12.0, Numba 0.68.0, cppyy 3.5.0), in the report stamped `e7a1ba7-dirty` (5 October 2026, before `fair_value` was renamed; the rename leaves the compiled core unchanged), one calibration was about 35× faster in C++ than in the Python reference, through any of the three bindings, and about 37× faster with Numba, which compiles for the host CPU where the C++ build targets generic x86-64. No cheap call was slower through the reflected bindings by more than that spread; through cppyy, each cheap call took about 10–20 ns longer than through the hand-written module. Rerun `just bench` before quoting a number.
 
 ## References & Further Reading
 * Blog Post: [Stop Choosing: Get C++ Performance in Python Algos with C++26](https://profitview.net/blog/cpp26-reflection-python-algo-trading)

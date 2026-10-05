@@ -6,7 +6,9 @@ same flags, as the static core inside the nanobind modules. So results must be
 identical, not merely close. The library must also export only the public
 out-of-line methods: GCC will not inline an exported function into its
 callers, so exporting the private helpers would make the shared build's hot
-path differ from the modules'. Build it with `just test-manual-bindings`
+path differ from the modules'. The former names fair_value and
+fair_value_quantlib are inline aliases in the header, so cppyy compiles them
+and the library does not export them. Build it with `just test-manual-bindings`
 (GCC only; CMake option MERTON_BUILD_SHARED_CORE=ON).
 
 The bindings themselves differ: cppyy's params() returns a reference to the
@@ -51,9 +53,10 @@ EXPORTED = {
     "merton::OnlineMertonCalibrator::OnlineMertonCalibrator(merton::MertonParams, merton::CalibratorConfig)",
     "merton::OnlineMertonCalibrator::update_tick(double, long)",
     "merton::OnlineMertonCalibrator::maybe_update_params()",
-    "merton::OnlineMertonCalibrator::fair_value(double, double, double, double) const",
-    "merton::OnlineMertonCalibrator::fair_value_quantlib(double, double, double, double) const",
+    "merton::OnlineMertonCalibrator::no_jump_conditional_mean(double, double, double, double) const",
+    "merton::OnlineMertonCalibrator::no_jump_conditional_mean_quantlib(double, double, double, double) const",
 }
+MEAN_METHODS = ("no_jump_conditional_mean", "no_jump_conditional_mean_quantlib", "fair_value", "fair_value_quantlib")
 
 
 def _make(module, **config):
@@ -87,10 +90,14 @@ def test_same_results_tick_by_tick():
         assert a.update_tick(price, ts) == b.update_tick(price, ts), where
         assert a.maybe_update_params() == b.maybe_update_params(), where
         assert _state(a) == _state(b), where
-        assert a.fair_value(price, 0.1, HOUR, 0.0) == b.fair_value(price, 0.1, HOUR, 0.0), where
+        mean = a.no_jump_conditional_mean(price, 0.1, HOUR, 0.0)
+        assert b.no_jump_conditional_mean(price, 0.1, HOUR, 0.0) == mean, where
+        assert a.fair_value(price, 0.1, HOUR, 0.0) == b.fair_value(price, 0.1, HOUR, 0.0) == mean, where
 
     assert b.calibration_count() == 8
-    assert a.fair_value_quantlib(100.0, 0.1, 0.5, 0.02) == b.fair_value_quantlib(100.0, 0.1, 0.5, 0.02)
+    mean_ql = a.no_jump_conditional_mean_quantlib(100.0, 0.1, 0.5, 0.02)
+    assert b.no_jump_conditional_mean_quantlib(100.0, 0.1, 0.5, 0.02) == mean_ql
+    assert a.fair_value_quantlib(100.0, 0.1, 0.5, 0.02) == b.fair_value_quantlib(100.0, 0.1, 0.5, 0.02) == mean_ql
 
 
 def test_same_results_at_default_configuration():
@@ -117,6 +124,14 @@ def test_binding_semantics():
     view = cal.params()
     view.sigma = 2.0
     assert cal.params().sigma == 2.0
-    assert cal.fair_value(100.0, 0.1, 0.5) == cal.fair_value(100.0, 0.1, 0.5, 0.0)
+    for method in MEAN_METHODS:
+        fn = getattr(cal, method)
+        assert fn(100.0, 0.1, 0.5) == fn(100.0, 0.1, 0.5, 0.0), method
     with pytest.raises(TypeError):
         cal.update_tick("100", 1)
+
+
+def test_the_same_methods_are_available():
+    for method in MEAN_METHODS:
+        assert hasattr(via_cppyy.OnlineMertonCalibrator, method), method
+        assert hasattr(reflected.OnlineMertonCalibrator, method), method

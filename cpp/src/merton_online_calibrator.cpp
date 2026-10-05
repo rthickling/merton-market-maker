@@ -3,7 +3,7 @@
 // -----------------------------------------------------------------------------
 //
 // Implements OnlineMertonCalibrator: a real-time Merton jump-diffusion
-// calibrator and fair-value pricer for crypto perpetuals.
+// calibrator for crypto perpetuals, with a no-jump conditional mean helper.
 //
 // Process: dS_t/S_t = (r - q - lambda*k)*dt + sigma*dW_t + (J-1)*dN_t
 //   - sigma: diffusion volatility
@@ -14,9 +14,9 @@
 // Flow:
 //   1. update_tick(price, ts_us): ingest ticks, compute log returns, roll buffer
 //   2. maybe_update_params(): gated MLE coordinate search over rolling returns
-//   3. fair_value(s0, q, T, r): S0 * exp((r - q - lambda*k)*T)
-//      Under the compensated SDE above, unconditional E[S_T] = S0*exp((r-q)*T).
-//      fair_value keeps the -lambda*k term (mean along the no-jump path).
+//   3. no_jump_conditional_mean(s0, q, T, r): S0 * exp((r - q - lambda*k)*T)
+//      = E[S_T | no jumps in (0, T]]. Under the compensated SDE above, the
+//      unconditional E[S_T] = S0*exp((r-q)*T). fair_value is the former name.
 // -----------------------------------------------------------------------------
 
 #include "merton_online_calibrator.hpp"
@@ -49,7 +49,7 @@ double safe_log(double x) {
 }
 
 /// Jump compensator k = E[J-1] = exp(mu_j + 0.5*delta_j^2) - 1.
-/// Used in drift and in fair-value formula.
+/// Used in the drift and in the no-jump conditional mean.
 double jump_compensator(double mu_j, double delta_j) {
     return std::exp(mu_j + 0.5 * delta_j * delta_j) - 1.0;
 }
@@ -230,32 +230,35 @@ bool OnlineMertonCalibrator::maybe_update_params() {
 }
 
 // -----------------------------------------------------------------------------
-// Fair value (analytic)
+// No-jump conditional mean (analytic)
 // -----------------------------------------------------------------------------
 //
 // Returns S0 * exp((r - q - lambda*k)*T) with k = jump_compensator(mu_j, delta_j).
-// That keeps the compensator in the drift: it is the mean along the no-jump path,
+// That keeps the compensator in the drift: it is E[S_T | no jumps in (0, T]],
 // not the unconditional E[S_T] = S0*exp((r-q)*T) implied by the SDE above.
 // No QuantLib in the hot path.
 // -----------------------------------------------------------------------------
 
-double OnlineMertonCalibrator::fair_value(double s0, double q_annual, double t_years, double r) const {
+double OnlineMertonCalibrator::no_jump_conditional_mean(double s0, double q_annual, double t_years,
+                                                        double r) const {
     const double k = jump_compensator(params_.mu_j, params_.delta_j);
     const double drift = r - q_annual - params_.lambda * k;
     return s0 * std::exp(drift * t_years);
 }
 
 // -----------------------------------------------------------------------------
-// Fair value (QuantLib-based helper)
+// No-jump conditional mean (QuantLib-based helper)
 // -----------------------------------------------------------------------------
 //
-// Same quantity as fair_value, via flat r/q curves: F = S0 * Dq(T)/Dr(T), then
-// F * exp(-lambda*k*T). The maturity is rounded to a whole number of days
-// (minimum one), so short horizons disagree slightly with fair_value.
+// Same quantity as no_jump_conditional_mean, via flat r/q curves:
+// F = S0 * Dq(T)/Dr(T), then F * exp(-lambda*k*T). The maturity is rounded to a
+// whole number of days (minimum one), so an 8-hour horizon is evaluated over one
+// day and short horizons disagree slightly with no_jump_conditional_mean.
 // Used for validation or when curve objects are needed; not on the hot path.
 // -----------------------------------------------------------------------------
 
-double OnlineMertonCalibrator::fair_value_quantlib(double s0, double q_annual, double t_years, double r) const {
+double OnlineMertonCalibrator::no_jump_conditional_mean_quantlib(double s0, double q_annual, double t_years,
+                                                                 double r) const {
     if (!(s0 > 0.0)) {
         return s0;
     }

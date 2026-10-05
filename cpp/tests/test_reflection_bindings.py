@@ -38,5 +38,5 @@ def test_calibrator_config_properties_and_methods(calibrator):
     assert math.isfinite(getattr(params, "lambda"))
 
     t_years = 8.0 / (365.25 * 24.0)
-    fv = calibrator.fair_value(price, 0.10, t_years, 0.0)
-    assert math.isfinite(fv) and fv > 0.0
+    mean = calibrator.no_jump_conditional_mean(price, 0.10, t_years, 0.0)
+    assert math.isfinite(mean) and mean > 0.0

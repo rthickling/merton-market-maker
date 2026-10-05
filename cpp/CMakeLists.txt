@@ -23,7 +23,7 @@ target_include_directories(merton_core
         ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
-# QuantLib: required for fair_value_quantlib helper.
+# QuantLib: required for the no_jump_conditional_mean_quantlib helper.
 if(DEFINED REFLECT_PY_STRAT_QL_INSTALL_DIR)
     set(JD_QL_ROOT "${REFLECT_PY_STRAT_QL_INSTALL_DIR}")
 else()

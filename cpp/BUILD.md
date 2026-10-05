@@ -74,7 +74,7 @@ Use `DOCKER_NETWORK=bridge` in CI or environments without Docker host networking
 
 ## First-time setup and day-to-day commands
 
-First-time setup needs a network connection. It builds the selected image (compiler, CPython, QuantLib, binding libraries, Numba) and is the slow step:
+First-time setup needs a network connection. It builds the selected image (compiler, CPython, QuantLib, binding libraries, Numba and, in the GCC image, cppyy) and is the slow step:
 
 ```bash
 just docker-build           # or `just test`, which builds the image if it is missing
@@ -87,7 +87,7 @@ After the image exists, day-to-day commands keep it. `just rebuild`, `just api`,
 just rebuild                # incremental compile of the selected combination
 just api                    # print the reflected Python interface
 just replay                 # replay synthetic ticks, or recorded ticks from MERTON_MARKET_MAKER_DATA_PATH
-just bench                  # agreement checks, then timings (nanobind only)
+just bench                  # agreement checks, then timings (GCC and nanobind only)
 just test                   # clean build and pytest (may reuse the image)
 just demo                   # live Binance quotes; needs the network
 ```
@@ -111,11 +111,11 @@ just build                  # clean build of the selected combination (deletes i
 just rebuild                # incremental build: keeps the build directory, recompiles only what changed
 just api                    # incremental build, then print the module's Python interface
 just replay                 # incremental build, then replay synthetic (or recorded) ticks offline
-just bench                  # time the Python reference, its Numba variant, and reflected and hand-written nanobind bindings
+just bench                  # time the Python reference, its Numba variant, reflected and hand-written nanobind bindings, and cppyy
 just test                   # build and test the selected combination (may reuse image cache)
 just test-compiler-matrix   # test both bindings with the selected compiler (may reuse image cache)
 just test-matrix            # test all four compiler/binding combinations (may reuse image cache)
-just test-manual-bindings   # also build the hand-written nanobind module and check it matches
+just test-manual-bindings   # also build the hand-written nanobind module (and, with GCC, the core for cppyy) and check they match
 ```
 
 Build and test commands do not copy modules to deployment locations.
@@ -134,6 +134,8 @@ cpp/build/gcc-16-nanobind-py3.13/merton_online_calibrator.so
 Both binding backends deliberately emit the same plain module filename. Tests set `PYTHONPATH` to the selected directory.
 
 `just test-manual-bindings` builds into `<combination>-with-manual` (for example `cpp/build/gcc-16-nanobind-py3.14-with-manual/`), which also contains `merton_manual_bindings.so`. That module is written by hand with nanobind but makes the same binding choices as the reflected one, so it can serve as a like-for-like baseline when measuring binding cost; `tests/test_manual_bindings.py` checks that the two expose the same interface and return the same results. It is built only when the CMake option `MERTON_BUILD_MANUAL_BINDINGS=ON` is set, which requires nanobind.
+
+With GCC, `just test-manual-bindings` also builds `libmerton_core_shared.so` there (CMake option `MERTON_BUILD_SHARED_CORE=ON`): the calibrator core compiled from the same sources with the same flags as the static library inside the modules. Of its own code it exports only the constructor and the four public methods defined in `src/merton_online_calibrator.cpp`, plus a size probe; QuantLib is linked in but not exported. `scripts/merton_cppyy.py` loads the library with cppyy, which reads `include/merton_online_calibrator.hpp` at run time, and `tests/test_cppyy_agreement.py` checks that it returns exactly what the nanobind module returns. cppyy's interpreter, the Clang 16 in cppyy-cling, cannot parse GCC 16's libstdc++ headers, so the GCC image sets `EXTRA_CLING_ARGS` to read Ubuntu's GCC 11 headers instead, and `scripts/merton_cppyy.py` refuses to load if the class layout cppyy derives from them differs from the library's. Only the GCC image installs cppyy: the Clang build uses libc++, and cppyy would lay the class out as libstdc++ does.
 
 ## Explicit deployment copy
 
@@ -156,7 +158,7 @@ The Dockerfiles pin:
 - CPython 3.14.8 (default) or 3.13.16 source by SHA-256
 - Bloomberg Clang P2996 by tested commit, or GCC 16.2 source by official SHA-512
 - QuantLib 1.33 and just 1.58.0 by SHA-256
-- all Python build/test packages and transitive dependencies by wheel hash
+- all Python build/test packages and transitive dependencies by wheel hash, except cppyy's three source packages (`requirements-cppyy.lock`), which the GCC image builds by hash against the pinned cppyy-cling
 
 `just versions` reports these versions. Clang and QuantLib/libc++ artifacts stay isolated from GCC and QuantLib/libstdc++ artifacts.
 

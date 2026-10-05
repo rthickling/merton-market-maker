@@ -5,6 +5,14 @@
 #include <deque>
 #include <optional>
 
+// Exported from libmerton_core_shared.so, which cppyy loads. Mark only methods the core never
+// calls itself: with -fPIC an exported function can be interposed, so GCC stops inlining it.
+#if defined(MERTON_CORE_SHARED)
+#define MERTON_API __attribute__((visibility("default")))
+#else
+#define MERTON_API
+#endif
+
 namespace merton {
 
 struct MertonParams {
@@ -25,18 +33,18 @@ struct CalibratorConfig {
 
 class OnlineMertonCalibrator {
 public:
-    OnlineMertonCalibrator(MertonParams initial, CalibratorConfig config = {});
+    MERTON_API OnlineMertonCalibrator(MertonParams initial, CalibratorConfig config = {});
 
     // Feed live prices. Returns true if a return was accepted.
-    bool update_tick(double price, std::int64_t epoch_us);
+    MERTON_API bool update_tick(double price, std::int64_t epoch_us);
 
     // Returns true if parameters were updated.
-    bool maybe_update_params();
+    MERTON_API bool maybe_update_params();
 
     // S0*exp((r - q - λκ)T), κ = exp(μ_J + δ_J²/2) - 1. Not the unconditional E[S_T].
-    double fair_value(double s0, double q_annual, double t_years, double r = 0.0) const;
+    MERTON_API double fair_value(double s0, double q_annual, double t_years, double r = 0.0) const;
     // Same quantity via QuantLib flat curves (day-rounded horizon; see THEORY.md).
-    double fair_value_quantlib(double s0, double q_annual, double t_years, double r = 0.0) const;
+    MERTON_API double fair_value_quantlib(double s0, double q_annual, double t_years, double r = 0.0) const;
 
     const MertonParams& params() const { return params_; }
     std::size_t sample_count() const { return returns_.size(); }

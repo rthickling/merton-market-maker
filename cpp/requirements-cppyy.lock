@@ -1,0 +1,11 @@
+# cppyy's source-only packages for Dockerfile.gcc, built with --no-deps --no-build-isolation against
+# the cppyy-cling, setuptools and wheel in requirements-docker.lock.<mm>. Generated with
+# `uv pip compile - --no-deps --generate-hashes --no-annotate --no-header` from these three pins.
+# Keep CPyCppyy's capitals: pip installs its C++ API headers to include/python<mm>/<name as written
+# here>, and cppyy only finds them under CPyCppyy/.
+cppyy==3.5.0 \
+    --hash=sha256:b9cfd48bd0c6e0c7399a82cca2105d7d90699adb3083904aaf30bf3632224e79
+cppyy-backend==1.15.3 \
+    --hash=sha256:4578216c16667f858a3f05bb30baa12d3d8cb8ee365bddd904e25fc2d3488d65
+CPyCppyy==1.13.0 \
+    --hash=sha256:783b2a8e6addbfb21fd4f49c3b61cca887e692d0a59073ab6c0130f365ca3b9c

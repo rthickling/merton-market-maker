@@ -109,6 +109,22 @@ RUN set -euo pipefail && cd /tmp && \
 COPY requirements-docker.lock.${PYTHON_MM} /tmp/requirements-docker.lock
 RUN python${PYTHON_MM} -m pip install --no-cache-dir --require-hashes -r /tmp/requirements-docker.lock && \
     rm -f /tmp/requirements-docker.lock
+# cppyy, in this image only: the core it calls must be built against libstdc++. Its interpreter
+# (Clang 16, from cppyy-cling) cannot parse GCC 16's libstdc++ headers, so it reads Ubuntu's GCC 11
+# headers; scripts/merton_cppyy.py checks that the class layout agrees with the compiled library.
+# -O2 replaces cppyy's default -O2 -march=native, keeping the image free of CPU-specific code.
+# -std=c++20 is cppyy's default, made explicit because cppyy reads any "std" here as the standard.
+ENV EXTRA_CLING_ARGS="-std=c++20 -O2 -nostdinc++ -isystem /usr/include/c++/11 -isystem /usr/include/x86_64-linux-gnu/c++/11 -isystem /usr/include/c++/11/backward"
+COPY requirements-cppyy.lock /tmp/requirements-cppyy.lock
+# Built against the pinned cppyy-cling and build tools installed above; build isolation would fetch
+# unpinned ones and an older cppyy-cling. CLING_STANDARD_PCH=none stops cppyy's installer building
+# its precompiled header, which it does with -march=native appended. The first import builds it with
+# the arguments above instead; the build fails if that warns or the header targets this CPU.
+RUN CLING_STANDARD_PCH=none python${PYTHON_MM} -m pip install --no-cache-dir --require-hashes --no-deps \
+      --no-build-isolation -r /tmp/requirements-cppyy.lock && \
+    python${PYTHON_MM} -m pip check && \
+    python${PYTHON_MM} -W error -c 'import cppyy; cppyy.cppdef("#ifdef __AVX__\n#error CPU-specific\n#endif")' && \
+    rm -f /tmp/requirements-cppyy.lock
 COPY print-build-info.sh /usr/local/bin/merton-build-info
 RUN chmod +x /usr/local/bin/merton-build-info && merton-build-info
 WORKDIR /workspace

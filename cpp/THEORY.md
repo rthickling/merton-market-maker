@@ -171,7 +171,7 @@ So the runtime loop is:
 
 The default local demonstration (`just demo` / `scripts/run_binance_demo.py`) runs this loop on Binance public bookTicker data and prints paper quotes. It places no orders.
 
-`profitview_merton_signal.py` is a historical wrapper from an earlier BitMEX deployment. That market is no longer the supported path; use the Binance demo or `just replay` for a current offline run.
+`profitview_merton_signal.py` is an optional legacy ProfitView strategy wrapper for venue-specific live deployment. The supported paths are the Binance demo (`just demo`) or offline `just replay`.
 
 ### Runtime pseudocode
 

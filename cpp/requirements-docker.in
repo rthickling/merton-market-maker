@@ -6,3 +6,8 @@ websockets==15.0.1
 python-dotenv==1.2.1
 numba==0.68.0
 numpy==2.5.3
+# cppyy's prebuilt interpreter, and the tools Dockerfile.gcc builds cppyy's source packages
+# (requirements-cppyy.lock) with. Shared by both images; only the GCC image installs cppyy.
+cppyy-cling==6.32.8
+setuptools==84.0.0
+wheel==0.48.0

@@ -10,6 +10,8 @@ set(MERTON_PYTHON_BINDING "pybind11" CACHE STRING "Python binding backend: pybin
 set_property(CACHE MERTON_PYTHON_BINDING PROPERTY STRINGS pybind11 nanobind)
 option(MERTON_BUILD_MANUAL_BINDINGS
     "Also build merton_manual_bindings, hand-written nanobind bindings for comparison" OFF)
+option(MERTON_BUILD_SHARED_CORE
+    "Also build libmerton_core_shared.so, the same core as a shared library for cppyy (GCC only)" OFF)
 
 set(MERTON_CORE_SOURCES
     src/merton_online_calibrator.cpp
@@ -232,6 +234,25 @@ endforeach()
 if(MERTON_PYTHON_BINDING STREQUAL "nanobind" AND TARGET nanobind-static)
     target_compile_options(nanobind-static PRIVATE ${REFLECT_PY_STRAT_CXX_FLAGS})
     target_include_directories(nanobind-static PRIVATE ${REFLECT_PY_STRAT_INCLUDE_DIRS})
+endif()
+
+# The core again as a shared library, for cppyy: same sources and flags as merton_core, exporting
+# only the MERTON_API methods, with QuantLib linked in but not exported. cppyy reads the header
+# with libstdc++, so a libc++ build would not match the class layout it assumes.
+if(MERTON_BUILD_SHARED_CORE)
+    if("-stdlib=libc++" IN_LIST REFLECT_PY_STRAT_CXX_FLAGS)
+        message(FATAL_ERROR "MERTON_BUILD_SHARED_CORE requires the GCC (libstdc++) toolchain")
+    endif()
+    add_library(merton_core_shared SHARED ${MERTON_CORE_SOURCES} src/merton_core_shared.cpp)
+    set_target_properties(merton_core_shared PROPERTIES DEFINE_SYMBOL MERTON_CORE_SHARED)
+    target_include_directories(merton_core_shared PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        "${JD_QUANTLIB_INCLUDE_DIR}"
+        ${REFLECT_PY_STRAT_INCLUDE_DIRS}
+    )
+    target_compile_options(merton_core_shared PRIVATE ${REFLECT_PY_STRAT_CXX_FLAGS})
+    target_link_libraries(merton_core_shared PRIVATE "${JD_QUANTLIB_LIBRARY}")
+    target_link_options(merton_core_shared PRIVATE ${REFLECT_PY_STRAT_LINK_FLAGS} -Wl,--exclude-libs,ALL)
 endif()
 
 # Explicit runtime linkage for portable extension loading.

@@ -318,7 +318,8 @@ test-matrix:
     done
   done
 
-# Also build the hand-written nanobind module and run all tests, including equivalence checks.
+# Also build the hand-written nanobind module (and, with GCC, the shared core that cppyy calls),
+# then run all tests, including equivalence checks.
 test-manual-bindings: docker-build
   #!/usr/bin/env bash
   set -euo pipefail
@@ -327,6 +328,12 @@ test-manual-bindings: docker-build
   if [[ "$MERTON_PYTHON_BINDING" != "nanobind" ]]; then
     echo "merton_manual_bindings uses nanobind; run with MERTON_PYTHON_BINDING=nanobind." >&2
     exit 1
+  fi
+  shared_core=OFF
+  import_check="import merton_manual_bindings, merton_online_calibrator"
+  if [[ "$COMPILER" == "gcc" ]]; then
+    shared_core=ON
+    import_check="$import_check; from scripts import merton_cppyy"
   fi
   docker_network="${DOCKER_NETWORK:-host}"
   repo="$(cd "{{root}}/.." && pwd)"
@@ -339,14 +346,16 @@ test-manual-bindings: docker-build
         -DCMAKE_TOOLCHAIN_FILE=/workspace/$toolchain \
         -DPython3_EXECUTABLE=$PYTHON_BIN \
         -DMERTON_PYTHON_BINDING=nanobind \
-        -DMERTON_BUILD_MANUAL_BINDINGS=ON
+        -DMERTON_BUILD_MANUAL_BINDINGS=ON \
+        -DMERTON_BUILD_SHARED_CORE=$shared_core
       cmake --build /workspace/$manual_dir
       export PYTHONPATH=/workspace/$manual_dir:/repo
-      $PYTHON_BIN -c 'import merton_manual_bindings, merton_online_calibrator'
+      $PYTHON_BIN -c '$import_check'
       $PYTHON_BIN -m pytest /workspace/tests
     "
 
-# Time readable Python against the C++ calibrator behind reflected and hand-written bindings (offline).
+# Time readable Python and Numba against the C++ calibrator behind reflected and hand-written
+# bindings and through cppyy (offline; GCC image only).
 bench *ARGS:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -356,6 +365,10 @@ bench *ARGS:
     echo "The benchmark compares nanobind modules; run with MERTON_PYTHON_BINDING=nanobind." >&2
     exit 1
   fi
+  if [[ "$COMPILER" != "gcc" ]]; then
+    echo "The benchmark includes cppyy, which needs the GCC image; run with COMPILER=gcc." >&2
+    exit 1
+  fi
   repo="$(cd "{{root}}/.." && pwd)"
   manual_dir="$build_dir-with-manual"
   commit="$(git -C "$repo" describe --always --dirty 2>/dev/null || echo unknown)"
@@ -363,13 +376,12 @@ bench *ARGS:
   docker run --network none --rm -e BENCH_COMMIT="$commit" \
     -v "{{root}}:/workspace" -v "$repo:/repo:ro" "$image_name" bash -lc "
       set -euo pipefail
-      if [ ! -f /workspace/$manual_dir/build.ninja ]; then
-        cmake -S /workspace -B /workspace/$manual_dir -G Ninja \
-          -DCMAKE_TOOLCHAIN_FILE=/workspace/$toolchain \
-          -DPython3_EXECUTABLE=$PYTHON_BIN \
-          -DMERTON_PYTHON_BINDING=nanobind \
-          -DMERTON_BUILD_MANUAL_BINDINGS=ON
-      fi
+      cmake -S /workspace -B /workspace/$manual_dir -G Ninja \
+        -DCMAKE_TOOLCHAIN_FILE=/workspace/$toolchain \
+        -DPython3_EXECUTABLE=$PYTHON_BIN \
+        -DMERTON_PYTHON_BINDING=nanobind \
+        -DMERTON_BUILD_MANUAL_BINDINGS=ON \
+        -DMERTON_BUILD_SHARED_CORE=ON > /dev/null
       cmake --build /workspace/$manual_dir
       PYTHONPATH=/workspace/$manual_dir:/repo $PYTHON_BIN /repo/scripts/bench_calibration.py \
         --out /workspace/build/bench {{ARGS}}

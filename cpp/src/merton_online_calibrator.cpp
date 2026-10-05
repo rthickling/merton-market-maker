@@ -3,7 +3,7 @@
 // -----------------------------------------------------------------------------
 //
 // Implements OnlineMertonCalibrator: a real-time Merton jump-diffusion
-// calibrator and fair-value pricer for BitMEX perpetuals.
+// calibrator and fair-value pricer for crypto perpetuals.
 //
 // Process: dS_t/S_t = (r - q - lambda*k)*dt + sigma*dW_t + (J-1)*dN_t
 //   - sigma: diffusion volatility

@@ -34,6 +34,7 @@ else
 fi
 
 "$python_bin" - <<'PY'
+import os
 from importlib.metadata import version
 expected = {
     "pybind11": "3.0.2",
@@ -43,7 +44,12 @@ expected = {
     "python-dotenv": "1.2.1",
     "numba": "0.68.0",
     "numpy": "2.5.3",
+    "cppyy-cling": "6.32.8",
+    "setuptools": "84.0.0",
+    "wheel": "0.48.0",
 }
+if os.environ.get("GCC_VERSION"):
+    expected |= {"cppyy": "3.5.0", "CPyCppyy": "1.13.0", "cppyy-backend": "1.15.3"}
 for package, wanted in expected.items():
     actual = version(package)
     if actual != wanted:

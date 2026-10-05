@@ -4,13 +4,18 @@ Optional ProfitView strategy wrapper around the shared Merton runtime.
 Preferred local demo (no ProfitView):
   cd cpp && just demo
 
-To deploy here:
+To deploy on ProfitView:
 1. Build a module (`just test`) and `just copy-module`.
 2. Paste this file into ProfitView's Trading Bots editor (scripts/ must be importable).
-3. Subscribe to XBTUSDT and create a BitMEX Market Maker bot.
+3. Subscribe to your perpetual symbol and create a Market Maker bot on the connected venue.
+
+Set `MERTON_INSTRUMENT_API_URL` to your venue's REST base for instrument/funding queries
+(JSON array with `fundingRate` and optional `markPrice`). Set `PROFITVIEW_SIGNAL_VENUE`
+to the venue id ProfitView expects in `signal()`.
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -37,8 +42,9 @@ from scripts.merton_runtime import (
 )
 
 FUNDING_REFRESH_SEC = 60
-SYM = "XBTUSDT"
-BITMEX_API_URL = "https://www.bitmex.com/api/v1"
+SYM = os.getenv("MERTON_SYMBOL", "XBTUSDT")
+INSTRUMENT_API_URL = os.getenv("MERTON_INSTRUMENT_API_URL", "").rstrip("/")
+SIGNAL_VENUE = os.getenv("PROFITVIEW_SIGNAL_VENUE", "")
 
 
 class Signals(Link):
@@ -55,8 +61,15 @@ class Signals(Link):
 
     @cron.run(every=FUNDING_REFRESH_SEC)
     def refresh_funding(self):
+        if not INSTRUMENT_API_URL:
+            logger.warning("MERTON_INSTRUMENT_API_URL is not set; funding carry stays at 0")
+            return
         try:
-            resp = requests.get(f"{BITMEX_API_URL}/instrument", params={"symbol": SYM}, timeout=5)
+            resp = requests.get(
+                f"{INSTRUMENT_API_URL}/instrument",
+                params={"symbol": SYM},
+                timeout=5,
+            )
             resp.raise_for_status()
             data = resp.json()
             if not data:
@@ -101,7 +114,8 @@ class Signals(Link):
                 )
             except Exception as e:
                 logger.warning(f"QuantLib monitor failed: {e}")
-        self.signal("bitmex", SYM, quote=[quote_bid, quote_ask])
+        if SIGNAL_VENUE:
+            self.signal(SIGNAL_VENUE, SYM, quote=[quote_bid, quote_ask])
         self.publish(
             "merton_theo",
             {

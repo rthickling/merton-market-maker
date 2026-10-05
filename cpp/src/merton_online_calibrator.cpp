@@ -289,7 +289,8 @@ double OnlineMertonCalibrator::fair_value_quantlib(double s0, double q_annual, d
 // Merton jump-diffusion PDF (truncated Poisson-Gaussian mixture)
 // -----------------------------------------------------------------------------
 //
-// f(x) = sum_{n=0}^{n_max} P(N=n) * phi((x - mu_n) / sigma_n) / sigma_n
+// f(x) = sum_{n=0}^{n_max-1} P(N=n) * phi((x - mu_n) / sigma_n) / sigma_n
+// (n_max terms: with the default 15, that is zero through fourteen jumps)
 // where:
 //   drift = (-lambda*k - 0.5*sigma^2)*dt
 //   mu_n = drift + n*mu_j

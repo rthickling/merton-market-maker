@@ -166,7 +166,8 @@ async def run(args: argparse.Namespace, policy: QuotePolicy) -> None:
     )
     print(f"connecting {url}", file=sys.stderr)
 
-    async for ws in websockets.connect(url, ping_interval=20):
+    # Binance can leave a closing connection open for the whole default close_timeout (10 s), which delays Ctrl-C.
+    async for ws in websockets.connect(url, ping_interval=20, close_timeout=1):
         try:
             async for raw in ws:
                 now = time.time()
@@ -236,6 +237,8 @@ async def run(args: argparse.Namespace, policy: QuotePolicy) -> None:
 
 
 def main() -> None:
+    # Without a TTY (docker run without -t, or a pipe) stdout is block-buffered, which holds back the quote lines.
+    sys.stdout.reconfigure(line_buffering=True)
     args = parse_args()
     if args.list_perps:
         print("\n".join(DEMO_PERPS))

@@ -223,7 +223,8 @@ demo: build-host
   fi
   docker_env=(-e "MERTON_SYMBOL=${MERTON_SYMBOL:-BTCUSDT}" -e "MERTON_MARKET=${MERTON_MARKET:-futures}")
   extra_mounts=()
-  for name in MERTON_SIGMA MERTON_LAMBDA MERTON_MU_J MERTON_DELTA_J; do
+  for name in MERTON_SIGMA MERTON_LAMBDA MERTON_MU_J MERTON_DELTA_J \
+      MERTON_MIN_HALF_SPREAD_BPS MERTON_RISK_HORIZON_SECONDS MERTON_RISK_MULTIPLIER MERTON_PRINT_SECONDS; do
     if [[ -n "${!name:-}" ]]; then
       docker_env+=(-e "$name=${!name}")
     fi

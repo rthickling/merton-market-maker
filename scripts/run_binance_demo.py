@@ -2,15 +2,19 @@
 """Stream Binance bookTicker quotes into the C++ Merton calibrator.
 
 No ProfitView, no order placement. Prints illustrative paper quotes centred on
-the market midpoint, the online calibration, and, as a diagnostic, the no-jump
-conditional mean over one funding interval. The fitted parameters are analytics;
-the quotes do not use them.
+the market midpoint, with a half-spread that is the largest of half the market
+spread, a floor and a model width from the fitted parameters' short-horizon
+return variance (scripts/merton_runtime.py). Each update is fed to the
+calibrator before it is quoted, so a refit sets the width of the update that
+produced it. A periodic line shows, as a diagnostic the quotes do not use, the
+no-jump conditional mean over one funding interval.
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
 import json
+import math
 import os
 import sys
 import time
@@ -37,13 +41,14 @@ from scripts.binance_perps import (
 from scripts.history import default_data_path, load_price_ticks, resample_last_price, warmup_calibrator
 from scripts.merton_runtime import (
     DEFAULT_FUNDING_INTERVAL_HOURS,
-    MIN_HALF_SPREAD_BPS,
     QL_MONITOR_EVERY_N_QUOTES,
+    LogThrottle,
+    QuoteError,
+    QuotePolicy,
     build_calibrator,
     funding_annual,
     horizon_years,
-    midpoint_quotes,
-    tick_calibrator,
+    quote_tick,
 )
 
 
@@ -56,6 +61,16 @@ def _import_moc():
             "Build with `cd cpp && just build` and keep PYTHONPATH on the build directory."
         ) from exc
     return moc
+
+
+def non_negative_seconds(text: str) -> float:
+    try:
+        value = float(text)
+    except ValueError:
+        value = math.nan
+    if not (math.isfinite(value) and value >= 0):
+        raise argparse.ArgumentTypeError(f"need a finite number of seconds >= 0, got {text!r}")
+    return value
 
 
 def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
@@ -79,6 +94,14 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     )
     p.add_argument("--no-history", action="store_true", help="Skip historical warmup")
     p.add_argument("--print-every", type=int, default=int(os.getenv("MERTON_PRINT_EVERY", "1")))
+    p.add_argument(
+        "--print-seconds",
+        type=non_negative_seconds,
+        default=os.getenv("MERTON_PRINT_SECONDS", "1"),
+        help="At most one quote line and one rejection line per this many seconds, and one no-jump diagnostic "
+        "line per ten times as many (0: no limit). Parameter updates always print. "
+        "Default: MERTON_PRINT_SECONDS, else 1",
+    )
     p.add_argument("--list-perps", action="store_true", help="Print selectable USD-M perps and exit")
     return p.parse_args(argv)
 
@@ -106,7 +129,7 @@ def fmt_next_funding(next_ms: Optional[int]) -> str:
     return dt.strftime("%Y-%m-%d %H:%M UTC")
 
 
-async def run(args: argparse.Namespace) -> None:
+async def run(args: argparse.Namespace, policy: QuotePolicy) -> None:
     import websockets
 
     symbol = require_demo_perp(args.symbol)
@@ -128,11 +151,17 @@ async def run(args: argparse.Namespace) -> None:
     t_years = horizon_years(interval_hours)
     last_funding_ts = 0.0
     quote_count = 0
+    rejected = 0
+    quote_lines = LogThrottle(args.print_seconds)
+    rejection_lines = LogThrottle(args.print_seconds)
+    diagnostic_lines = LogThrottle(10 * args.print_seconds)
     url = ws_url(symbol, args.market)
     print(f"perps: {', '.join(DEMO_PERPS)}", file=sys.stderr)
     print(
-        f"paper quotes: mid +/- max({MIN_HALF_SPREAD_BPS:g} bp of mid, half the market spread); no orders are "
-        "placed. The fitted parameters and the no-jump mean are analytics and do not move the quotes.",
+        "paper quotes: mid +/- the largest of half the market spread, "
+        f"{policy.min_half_spread_bps:g} bp of mid, and {policy.risk_multiplier:g} x mid x the fitted model's "
+        f"{policy.risk_horizon_seconds:g}s log-return standard deviation; no orders are placed. "
+        "The no-jump mean is a diagnostic and does not move the quotes.",
         file=sys.stderr,
     )
     print(f"connecting {url}", file=sys.stderr)
@@ -161,34 +190,46 @@ async def run(args: argparse.Namespace) -> None:
                 ask = float(msg.get("a") or 0)
                 if not bid or not ask:
                     continue
-                mid, quote_bid, quote_ask = midpoint_quotes(bid, ask)
                 event_ms = int(msg.get("E") or (now * 1000))
-                tick_calibrator(calibrator, mid, event_ms * 1000)
-                quote_count += 1
-                if quote_count % max(args.print_every, 1) != 0:
+                try:
+                    tick, quote = quote_tick(calibrator, bid, ask, event_ms * 1000, policy)
+                except QuoteError as exc:
+                    rejected += 1
+                    if rejection_lines.ready():
+                        print(f"{symbol} {exc}; no quote for this update ({rejected} rejected so far)", file=sys.stderr)
                     continue
-                q_annual = (
-                    funding_annual(funding_rate, interval_hours) if args.market == "futures" else 0.0
-                )
-                no_jump_mean = calibrator.no_jump_conditional_mean(mid, q_annual, t_years, 0.0)
-                vs_mid_bps = ((no_jump_mean - mid) / mid) * 10000 if mid else 0.0
-                p = calibrator.params()
-                print(
-                    f"{symbol} mid={fmt_px(mid)} paper=[{fmt_px(quote_bid)}, {fmt_px(quote_ask)}] "
-                    f"| sigma={p.sigma:.4f} lambda={getattr(p, 'lambda'):.3f} "
-                    f"| diagnostic: no-jump mean over {interval_hours:g}h={fmt_px(no_jump_mean)} "
-                    f"({vs_mid_bps:+.1f} bp vs mid)"
-                )
-                if QL_MONITOR_EVERY_N_QUOTES > 0 and quote_count % QL_MONITOR_EVERY_N_QUOTES == 0:
+                quote_count += 1
+                if tick.params_updated:
+                    print(
+                        f"{symbol} params updated (calibration {calibrator.calibration_count()}): "
+                        f"{quote.params.describe()} -> model half-spread {quote.bps(quote.model_half_spread):.2f}bp"
+                    )
+                if quote_count % max(args.print_every, 1) == 0 and quote_lines.ready():
+                    print(
+                        f"{symbol} mid={fmt_px(quote.mid)} paper=[{fmt_px(quote.bid)}, {fmt_px(quote.ask)}] "
+                        f"{quote.describe()}"
+                    )
+                if (
+                    QL_MONITOR_EVERY_N_QUOTES > 0
+                    and quote_count % QL_MONITOR_EVERY_N_QUOTES == 0
+                    and diagnostic_lines.ready()
+                ):
+                    q_annual = (
+                        funding_annual(funding_rate, interval_hours) if args.market == "futures" else 0.0
+                    )
+                    no_jump_mean = calibrator.no_jump_conditional_mean(quote.mid, q_annual, t_years, 0.0)
+                    vs_mid_bps = ((no_jump_mean - quote.mid) / quote.mid) * 10000
+                    line = (
+                        f"{symbol} diagnostic, not used by quotes: no-jump mean over {interval_hours:g}h="
+                        f"{fmt_px(no_jump_mean)} ({vs_mid_bps:+.1f} bp vs mid)"
+                    )
                     try:
-                        ql_mean = calibrator.no_jump_conditional_mean_quantlib(mid, q_annual, t_years, 0.0)
-                        gap_bps = ((ql_mean - no_jump_mean) / mid) * 10000 if mid else 0.0
-                        print(
-                            f"{symbol} ql_monitor (diagnostic) no-jump mean: analytic={fmt_px(no_jump_mean)} "
-                            f"quantlib={fmt_px(ql_mean)} (horizon rounded to whole days) gap={gap_bps:.2f}bp"
-                        )
+                        ql_mean = calibrator.no_jump_conditional_mean_quantlib(quote.mid, q_annual, t_years, 0.0)
+                        gap_bps = ((ql_mean - no_jump_mean) / quote.mid) * 10000
+                        line += f"; quantlib={fmt_px(ql_mean)} (horizon rounded to whole days) gap={gap_bps:.2f}bp"
                     except Exception as exc:
                         print(f"QuantLib monitor failed: {exc}", file=sys.stderr)
+                    print(line)
         except websockets.ConnectionClosed:
             print("websocket closed; reconnecting", file=sys.stderr)
             continue
@@ -201,7 +242,8 @@ def main() -> None:
         return
     try:
         require_demo_perp(args.symbol)
-        asyncio.run(run(args))
+        policy = QuotePolicy.from_env()
+        asyncio.run(run(args, policy))
     except KeyboardInterrupt:
         print("stopped", file=sys.stderr)
     except ValueError as exc:

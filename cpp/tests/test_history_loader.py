@@ -64,17 +64,41 @@ def test_midpoint_quotes_are_centred_on_mid_and_keep_the_floor(bid, ask, half_sp
     assert quote_bid <= bid and quote_ask >= ask
 
 
-def test_replay_quote_is_centred_on_the_last_price(capsys):
+def test_replay_quote_is_centred_on_the_last_price_and_explains_its_width(capsys):
     from scripts import replay_demo
 
     replay_demo.run(replay_demo.parse_args(["--synthetic"]))
     out = capsys.readouterr().out
-    quote = re.search(r"^quote: mid=([\d.]+) paper=\[([\d.]+), ([\d.]+)\]$", out, re.MULTILINE)
+    quote = re.search(
+        r"^quote: mid=([\d.]+) paper=\[([\d.]+), ([\d.]+)\] half=([\d.]+)bp set by (model|floor|market spread) "
+        r"\(model ([\d.]+)bp, floor ([\d.]+)bp, market ([\d.]+)bp; 60s horizon; params (seeded|calibrated)\)$",
+        out,
+        re.MULTILINE,
+    )
     assert quote, out
-    mid, quote_bid, quote_ask = map(float, quote.groups())
+    mid, quote_bid, quote_ask, half, model, floor, market = map(float, quote.group(1, 2, 3, 4, 6, 7, 8))
     assert (quote_bid + quote_ask) / 2.0 == pytest.approx(mid, abs=0.01)
-    assert quote_ask - quote_bid == pytest.approx(2 * mid * replay_demo.HALF_SPREAD_BPS / 10_000, abs=0.02)
+    assert (quote_ask - quote_bid) / 2.0 / mid * 10_000 == pytest.approx(half, abs=0.01)
+    assert half == max(model, floor, market)
+    assert (floor, market) == (2.0, 0.0)
+    assert quote.group(5) == "model" and quote.group(9) == "calibrated"
+    assert re.search(r"^initial: .* \(seeded; model half-spread [\d.]+bp\)$", out, re.MULTILINE), out
+    assert re.search(r"^tick +\d+  mid=[\d.]+  sigma=.* model=[\d.]+bp$", out, re.MULTILINE), out
     assert re.search(r"^diagnostic: no-jump mean over 8h=[\d.]+ \([+-]\d+\.\d bp vs mid\)$", out, re.MULTILINE), out
+
+
+def test_replay_policy_flags_change_the_width_and_are_validated(capsys):
+    from scripts import replay_demo
+
+    def half_spread_bps(*flags):
+        replay_demo.run(replay_demo.parse_args(["--synthetic", *flags]))
+        return float(re.search(r"^quote: .* half=([\d.]+)bp", capsys.readouterr().out, re.MULTILINE).group(1))
+
+    base = half_spread_bps()
+    assert half_spread_bps("--risk-horizon-seconds", "240") == pytest.approx(2 * base, abs=0.02)
+    assert half_spread_bps("--risk-multiplier", "0.1", "--min-half-spread-bps", "5") == 5.0
+    with pytest.raises(SystemExit, match="risk_multiplier"):
+        replay_demo.run(replay_demo.parse_args(["--synthetic", "--risk-multiplier", "0"]))
 
 
 def test_funding_annual_scales_with_interval():

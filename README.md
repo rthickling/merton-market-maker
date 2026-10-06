@@ -12,7 +12,7 @@ An online jump-diffusion calibration example with an illustrative quoting demo: 
 This project is an engineering demonstration. The included Merton Jump Diffusion (MJD) algorithm is a standard, textbook model used to provide a real-world context.
 * This is not a money-printing bot.
 * It exposes no novel alpha.
-* The demo's paper quotes are centred on the market midpoint; the fitted parameters are analytics and do not move them.
+* The demo's paper quotes are centred on the market midpoint. The fitted parameters set how wide they are, through an illustrative risk rule, not an optimal or profitable quoting strategy.
 * The value is in the infrastructure, not the strategy.
 
 ---
@@ -95,7 +95,7 @@ print(f"no-jump conditional mean, 8h: {calibrator.no_jump_conditional_mean(68020
 ## Why Merton Jump Diffusion?
 I chose the MJD model because its math is heavy. It requires infinite-series-style mixture summations that would be much slower in pure Python. It illustrates the "Speed-to-Book" need for compiled math, while the high-level trading logic still benefits from Python's "Speed-to-Market."
 
-The substantial work is the calibration: each refit evaluates that mixture likelihood over the whole rolling window many times. The no-jump conditional mean the demo prints afterwards is a single exponential.
+The substantial work is the calibration: each refit evaluates that mixture likelihood over the whole rolling window many times. The quote width the demo then derives from the fitted parameters is a square root, and the no-jump conditional mean it prints is a single exponential.
 
 ## Technical Stack
 C++26 reflection is built with either released GCC 16.2 and libstdc++ or the pinned Bloomberg Clang P2996 fork and libc++. Both toolchains support the nanobind and pybind11 backends and run entirely in pinned `linux/amd64` Docker environments.
@@ -107,7 +107,7 @@ cd cpp
 just demo
 ```
 
-This builds the default GCC/nanobind/CPython 3.14 module and streams Binance USD-M bookTicker quotes into the C++ calibrator. It places no orders. Its paper quotes are centred on the market midpoint: mid ± the larger of 2 bp of mid (`MERTON_MIN_HALF_SPREAD_BPS`) and half the market spread. The calibrated parameters are analytics and do not move the quotes. Each line also shows, as a labelled diagnostic, the no-jump conditional mean over one funding interval: a model quantity that depends only on the parameters and the carry, not a fair value, mispricing or signal. Funding is context: the live rate, annualized from each contract’s interval (8h/4h/1h), enters only that diagnostic, and the horizon is the interval’s full length, not the time to the next payment. Default symbol is `BTCUSDT`. Selectable perps: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `XRPUSDT`, `XAUUSDT`. Optional historical warmup: set `MERTON_MARKET_MAKER_DATA_PATH` to a CSV/Parquet directory. ProfitView is not required.
+This builds the default GCC/nanobind/CPython 3.14 module and streams Binance USD-M bookTicker quotes into the C++ calibrator. It places no orders. The calibrator estimates continuous volatility and jump behaviour. The demo uses the resulting short-horizon return variance to adjust quote width around the current market midpoint. Each book update reaches the calibrator first and is then quoted at mid ± the largest of half the market spread, 2 bp of mid (`MERTON_MIN_HALF_SPREAD_BPS`), and mid × 1 (`MERTON_RISK_MULTIPLIER`) × √(T(σ² + λ(μ_J² + δ_J²))) with T = 60 s (`MERTON_RISK_HORIZON_SECONDS`). In that variance, λ(μ_J² + δ_J²) is the jump contribution to log-return variance. These defaults are demonstration choices. Quote lines, at most one a second (`MERTON_PRINT_SECONDS`), say which of the three set the width and whether the parameters are still the seeds or have been calibrated, and each refit prints its parameters and model width. The rule does not model inventory, adverse selection, execution probability, fees or optimal quoting ([details](cpp/THEORY.md#model-driven-quote-width)). A periodic line shows, as a labelled diagnostic the quotes do not use, the no-jump conditional mean over one funding interval: a model quantity that depends only on the parameters and the carry, not a fair value, mispricing or signal. Funding is context: the live rate, annualized from each contract’s interval (8h/4h/1h), enters only that diagnostic, not the quote width, and the horizon is the interval’s full length, not the time to the next payment. Default symbol is `BTCUSDT`. Selectable perps: `BTCUSDT`, `ETHUSDT`, `SOLUSDT`, `XRPUSDT`, `XAUUSDT`. Optional historical warmup: set `MERTON_MARKET_MAKER_DATA_PATH` to a CSV/Parquet directory. ProfitView is not required.
 
 ```bash
 just test                 # build and pytest the selected toolchain
@@ -126,7 +126,7 @@ These do not need a market connection. `just api`, `just replay` and `just bench
 cd cpp
 just test      # build and test the selected combination
 just api       # print the reflected Python interface
-just replay    # replay a seeded synthetic path (or recorded ticks)
+just replay    # replay a seeded synthetic path (or recorded ticks) through the calibrator and the quote rule
 just bench     # validate, then time Python, Numba, and C++ behind reflected and hand-written bindings and through cppyy
 ```
 

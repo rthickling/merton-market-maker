@@ -6,9 +6,12 @@ MERTON_MARKET_MAKER_DATA_PATH to replay recorded CSV/Parquet instead.
 Floats are printed with fixed formats so unchanged input yields byte-identical
 output. Intended to be started from the repository root, e.g. `cd cpp && just replay`.
 
-The closing paper quote is centred on the last price, the replay's midpoint;
-with no book to replay, the minimum half-spread sets its width. The no-jump
-conditional mean is printed as a labelled diagnostic, not as a quote input.
+Every tick is quoted the way the live demo quotes a book update
+(scripts/merton_runtime.py quote_tick), with the price as the midpoint and a
+zero market spread, so the width comes from the floor or from the model. The
+quote policy is set by flags, not the environment, to keep the output
+reproducible. The no-jump conditional mean is printed as a labelled diagnostic,
+not as a quote input.
 """
 
 from __future__ import annotations
@@ -27,14 +30,16 @@ from scripts.merton_runtime import (
     CPP_WINDOW_SIZE,
     T_HOURS,
     T_YEARS,
+    QuoteError,
+    QuotePolicy,
     build_calibrator,
-    midpoint_quotes,
+    quote_tick,
 )
 from scripts.synthetic_ticks import PathSpec, merton_ticks
 
 # Fixed seeds so host .env cannot change the default synthetic run.
 SEEDS = {"sigma": 0.44, "lambda": 20.0, "mu_j": 0.003, "delta_j": 0.01}
-HALF_SPREAD_BPS = 2.0
+DEFAULT_POLICY = QuotePolicy()
 MAX_EVENT_LINES = 4
 
 
@@ -67,6 +72,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=CPP_WINDOW_SIZE + 1,
         help=f"Synthetic tick count (default {CPP_WINDOW_SIZE + 1})",
+    )
+    p.add_argument(
+        "--risk-horizon-seconds",
+        type=float,
+        default=DEFAULT_POLICY.risk_horizon_seconds,
+        help=f"Horizon of the model width (default {DEFAULT_POLICY.risk_horizon_seconds:g})",
+    )
+    p.add_argument(
+        "--risk-multiplier",
+        type=float,
+        default=DEFAULT_POLICY.risk_multiplier,
+        help=f"Multiplier on the model width (default {DEFAULT_POLICY.risk_multiplier:g})",
+    )
+    p.add_argument(
+        "--min-half-spread-bps",
+        type=float,
+        default=DEFAULT_POLICY.min_half_spread_bps,
+        help=f"Half-spread floor in bp of mid (default {DEFAULT_POLICY.min_half_spread_bps:g})",
     )
     return p.parse_args(argv)
 
@@ -102,13 +125,6 @@ def fmt_px(price: float) -> str:
     return f"{price:.8f}"
 
 
-def fmt_params(p) -> str:
-    return (
-        f"sigma={p.sigma:.4f} lambda={getattr(p, 'lambda'):.3f} "
-        f"mu_j={p.mu_j:.6f} delta_j={p.delta_j:.6f}"
-    )
-
-
 def select_events(events: list, limit: int = MAX_EVENT_LINES) -> list:
     if len(events) <= limit:
         return events
@@ -118,16 +134,26 @@ def select_events(events: list, limit: int = MAX_EVENT_LINES) -> list:
 
 
 def run(args: argparse.Namespace) -> None:
+    try:
+        policy = QuotePolicy(args.risk_horizon_seconds, args.risk_multiplier, args.min_half_spread_bps)
+    except ValueError as exc:
+        raise SystemExit(f"invalid quote policy: {exc}") from exc
     ticks, source = load_ticks(args)
     moc = _import_moc()
     cal = build_calibrator(moc, seeds=SEEDS)
 
-    events: list[tuple[int, float, object]] = []
+    first = None
+    events = []
     for i, (price, epoch_us) in enumerate(ticks, start=1):
-        if not cal.update_tick(price, epoch_us):
-            continue
-        if cal.maybe_update_params():
-            events.append((i, price, cal.params()))
+        try:
+            tick, quote = quote_tick(cal, price, price, epoch_us, policy)
+        except QuoteError as exc:
+            raise SystemExit(f"tick {i}: {exc}") from exc
+        if first is None:
+            first = quote
+        if tick.params_updated:
+            events.append((i, quote))
+    last = quote
 
     print("Offline Merton calibrator replay")
     print(
@@ -135,29 +161,35 @@ def run(args: argparse.Namespace) -> None:
         f"update_every={CPP_UPDATE_EVERY_N_RETURNS}, n_max={CPP_N_MAX}"
     )
     print(
-        f"initial: sigma={SEEDS['sigma']:.4f} lambda={SEEDS['lambda']:.3f} "
-        f"mu_j={SEEDS['mu_j']:.6f} delta_j={SEEDS['delta_j']:.6f}"
+        f"policy: half-spread = max(market half-spread, {policy.min_half_spread_bps:g}bp floor, "
+        f"{policy.risk_multiplier:g} x mid x model sd over {policy.risk_horizon_seconds:g}s); "
+        "replayed prices have no book, so the market half-spread is 0"
+    )
+    print(
+        f"initial: {first.params.describe()} "
+        f"({first.params_source}; model half-spread {first.bps(first.model_half_spread):.2f}bp)"
     )
     print()
 
     chosen = select_events(events)
     omitted = len(events) - len(chosen)
-    for idx, (tick_i, price, params) in enumerate(chosen):
+    for idx, (tick_i, quote) in enumerate(chosen):
         if omitted and idx == len(chosen) // 2:
             print(f"... ({omitted} more parameter changes)")
-        print(f"tick {tick_i:>6}  mid={fmt_px(price)}  {fmt_params(params)}")
+        print(
+            f"tick {tick_i:>6}  mid={fmt_px(quote.mid)}  {quote.params.describe()}  "
+            f"model={quote.bps(quote.model_half_spread):.2f}bp"
+        )
 
-    last_price = ticks[-1][0]
-    mid, quote_bid, quote_ask = midpoint_quotes(last_price, last_price, min_half_spread_bps=HALF_SPREAD_BPS)
-    no_jump_mean = cal.no_jump_conditional_mean(mid, 0.0, T_YEARS, 0.0)
-    vs_mid_bps = ((no_jump_mean - mid) / mid) * 10000.0 if mid else 0.0
+    no_jump_mean = cal.no_jump_conditional_mean(last.mid, 0.0, T_YEARS, 0.0)
+    vs_mid_bps = ((no_jump_mean - last.mid) / last.mid) * 10000.0
     print()
     print(
         f"final: ticks={len(ticks)} samples={cal.sample_count()} "
         f"calibrations={cal.calibration_count()} changed={len(events)}"
     )
-    print(f"params: {fmt_params(cal.params())}")
-    print(f"quote: mid={fmt_px(mid)} paper=[{fmt_px(quote_bid)}, {fmt_px(quote_ask)}]")
+    print(f"params: {last.params.describe()}")
+    print(f"quote: mid={fmt_px(last.mid)} paper=[{fmt_px(last.bid)}, {fmt_px(last.ask)}] {last.describe()}")
     print(f"diagnostic: no-jump mean over {T_HOURS:g}h={fmt_px(no_jump_mean)} ({vs_mid_bps:+.1f} bp vs mid)")
 
 

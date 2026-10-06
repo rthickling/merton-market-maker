@@ -71,8 +71,9 @@ Python usage pattern:
 
 1. On each tick: `update_tick(price, ts_us)`
 2. Every N returns: `maybe_update_params()`
-3. Optionally, as a diagnostic: `no_jump_conditional_mean(mid, q_annual, T_years, r)` with `r` passed explicitly (the demos' paper quotes do not use it; they are centred on the market midpoint)
-4. Periodically pull `params()` for logging / persistence
+3. In the demos, on each tick after steps 1 and 2: read `params()` and set the paper-quote width from them (see [Model-driven quote width](#model-driven-quote-width))
+4. Optionally, as a diagnostic: `no_jump_conditional_mean(mid, q_annual, T_years, r)` with `r` passed explicitly (the demos' paper quotes use neither it nor the funding carry; they are centred on the market midpoint)
+5. Periodically pull `params()` for logging / persistence
 
 QuantLib integration (for illustration purposes):
 
@@ -173,15 +174,52 @@ the same quantity via flat QuantLib curves, but rounds the horizon to a whole
 number of days (minimum one), which creates a small systematic gap on sub-day
 horizons: an 8-hour horizon is evaluated over one day.
 
+### Model-driven quote width
+
+The calibrator estimates continuous volatility and jump behaviour. The demo uses the resulting short-horizon return variance to adjust quote width around the current market midpoint. Under the Merton model the calibrator fits, the log return over a horizon $T$ has variance
+
+$$
+\operatorname{Var}\bigl[\ln(S_T/S_0)\bigr] = T\bigl(\sigma^2 + \lambda(\mu_J^2 + \delta_J^2)\bigr).
+$$
+
+$\sigma^2 T$ comes from the diffusion. $\lambda(\mu_J^2 + \delta_J^2)T$ is the jump contribution to log-return variance: the log jumps over $T$ are a compound Poisson sum of $N_T \sim \text{Poisson}(\lambda T)$ jumps $Y \sim N(\mu_J, \delta_J^2)$, whose variance is $\lambda T\,E[Y^2] = \lambda T(\delta_J^2 + \mu_J^2)$. The mean jump size counts as well as the spread of jump sizes, because the number of jumps is random, and its sign does not matter.
+
+The paper quote is
+
+$$
+h = \max\Bigl(\frac{\text{ask} - \text{bid}}{2},\;
+\text{mid} \cdot \frac{b}{10\,000},\;
+\text{mid} \cdot k \cdot \sqrt{\operatorname{Var}\bigl[\ln(S_T/S_0)\bigr]}\Bigr),
+\qquad
+\text{quote} = \text{mid} \pm h,
+$$
+
+where $T$ is `MERTON_RISK_HORIZON_SECONDS` (default 60 s, converted to years of 365.25 days), $k$ is `MERTON_RISK_MULTIPLIER` (default 1) and $b$ is the floor `MERTON_MIN_HALF_SPREAD_BPS` (default 2 bp). These defaults are demonstration choices, not calibrated trading settings. The third term converts a log-return dispersion into a price distance, a reasonable approximation over short horizons. It is not an exact price standard deviation, a confidence interval or a value-at-risk, and it predicts no direction: the quote stays centred on the midpoint. The risk horizon is chosen for this rule. It is independent of the funding interval, which only the no-jump diagnostic uses, and of when the calibrator refits.
+
+`quote_tick` in `scripts/merton_runtime.py` feeds each update's midpoint to the calibrator first, then quotes from the parameters the calibrator holds afterwards, so a refit sets the width of the tick that produced it. Until the first calibration (`calibration_count() == 0`) those are the seed parameters and the output says `params seeded`; after it, `params calibrated`. Each quote also names the term that set its width: `market spread`, `floor` or `model` (on a tie, the earlier one in that order). Invalid policy settings stop the demo at startup. A non-finite, non-positive or crossed book never reaches the calibrator. That, non-finite or negative parameters, a non-finite variance, or a quote that would be non-finite, non-positive or zero-width raises `QuoteError`: the update gets no quote and a logged reason, and no fixed-spread quote replaces it.
+
+For example, take mid 60,000 with the same book each time (bid 60,000 − 0.05, ask 60,000 + 0.05, a market half-spread under 0.01 bp) and the default policy:
+
+| $\sigma$, $\lambda$, $\mu_J$, $\delta_J$ | Model half-spread | Set by | Paper quotes |
+|---|---|---|---|
+| 0.44, 20, 0.003, 0.01 (the seeds) | 6.10 bp | model | 59,963.39 / 60,036.61 |
+| 0.44, 40, −0.05, 0.05 (more and larger jumps) | 8.65 bp | model | 59,948.10 / 60,051.90 |
+| 0.05, 0.01, 0, 0.01 (calm) | 0.69 bp | the 2 bp floor | 59,988.00 / 60,012.00 |
+
+`tests/test_quote_policy.py` checks these numbers. In the offline replay (`just replay`) each price is its own midpoint with no book, so the width comes from the floor or the model; its policy is set by flags (`--risk-horizon-seconds`, `--risk-multiplier`, `--min-half-spread-bps`) rather than the environment, to keep its output reproducible.
+
+This is an illustrative risk-sensitive quoting rule, not an optimal market-making strategy or a claim of profitability. It does not model inventory, adverse selection, the probability of execution, fees or optimal quoting, and the paper quotes are never sent as orders.
+
 So the runtime loop is:
 
 - `update_tick` (every tick)
 - `maybe_update_params` (periodically): the substantial work, the likelihood over the rolling window
+- the paper-quote width (every tick in the demos): a square root of the current parameters' log-return variance, compared with the floor and half the market spread
 - `no_jump_conditional_mean` (optional diagnostic): a single exponential
 
-The default local demonstration (`just demo` / `scripts/run_binance_demo.py`) runs this loop on Binance public bookTicker data. It prints illustrative paper quotes centred on the market midpoint, `mid ± max(mid × minimum half-spread, half the market spread)`, alongside the calibrated parameters and the diagnostic, which are analytics and do not move the quotes. It places no orders.
+The default local demonstration (`just demo` / `scripts/run_binance_demo.py`) runs this loop on Binance public bookTicker data. It prints illustrative paper quotes centred on the market midpoint with the width above, each saying what set it; a line for each refit, with the new parameters and model half-spread; and periodically the no-jump diagnostic, labelled as not used by the quotes. Quote lines are throttled to one per `MERTON_PRINT_SECONDS` (default 1), and the diagnostic to one per ten times that. It places no orders.
 
-`profitview_merton_signal.py` is an optional legacy ProfitView strategy wrapper for venue-specific live deployment. It quotes around the midpoint in the same way. Its `merton_theo` topic keeps the earlier `theo` and `diff_bps` fields, as aliases of `no_jump_conditional_mean` and `no_jump_mean_vs_mid_bps`. The supported paths are the Binance demo (`just demo`) or offline `just replay`.
+`profitview_merton_signal.py` is an optional legacy ProfitView strategy wrapper for venue-specific live deployment. It quotes around the midpoint in the same way, through `quote_tick`, and sends no signal and publishes nothing for an update it cannot quote. Its `merton_theo` topic keeps the earlier `theo` and `diff_bps` fields, as aliases of `no_jump_conditional_mean` and `no_jump_mean_vs_mid_bps`, and adds `half_spread_bps`, `model_half_spread_bps`, `floor_half_spread_bps`, `market_half_spread_bps`, `width_set_by`, `params_source` and `risk_horizon_seconds`. The supported paths are the Binance demo (`just demo`) or offline `just replay`.
 
 The agreement tests show that the C++, pure-Python, Numba and cppyy paths compute the same numbers. They do not validate the model, the diagnostic or the quotes.
 
@@ -189,20 +227,27 @@ The agreement tests show that the C++, pure-Python, Numba and cppyy paths comput
 
 ```text
 init calibrator(params0, config)
+policy = (risk_horizon_seconds=60, risk_multiplier=1, min_half_spread_bps=2)  # validated at startup
 
 for each market tick (bid, ask, ts_us):
+    skip with a logged reason unless 0 < bid <= ask, both finite  # the calibrator never sees it
     mid = (bid + ask) / 2
     accepted = calibrator.update_tick(mid, ts_us)
 
     if accepted:
-        updated = calibrator.maybe_update_params()
+        updated = calibrator.maybe_update_params()  # a refit applies to this tick's quote
         if updated:
             params = calibrator.params()
-            # optional: log/store params (analytics)
+            # optional: log/store params
 
-    # Paper quotes: centred on the midpoint; the fitted parameters do not move them.
-    half_spread = max(mid * min_half_spread_bps / 10_000, (ask - bid) / 2)
-    quote_bid, quote_ask = mid - half_spread, mid + half_spread
+    # Paper quotes: centred on the midpoint; the current parameters set the width.
+    p = calibrator.params()  # the seeds until calibration_count() > 0
+    T = risk_horizon_seconds / (365.25 * 24 * 3600)
+    variance = T * (p.sigma**2 + p.lambda_ * (p.mu_j**2 + p.delta_j**2))
+    half_spread = max((ask - bid) / 2,
+                      mid * min_half_spread_bps / 10_000,
+                      mid * risk_multiplier * sqrt(variance))
+    quote_bid, quote_ask = mid - half_spread, mid + half_spread  # rejected if not finite, bid <= 0 or zero width
 
     # Optional diagnostic over one full funding interval (a fixed length, not a countdown).
     q_annual = funding_to_annual(funding_rate, interval_hours)  # Binance: live 8h/4h/1h

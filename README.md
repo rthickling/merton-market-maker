@@ -5,6 +5,8 @@
 
 An online jump-diffusion calibration example with an illustrative quoting demo: a C++ calibrator refits a Merton jump-diffusion model to a rolling window of prices, and C++26 reflection generates its Python bindings.
 
+This was presented and demonstrated at the [PyData London Meetup 110 at Birkbeck College](https://www.meetup.com/pydata-london-meetup/events/316770322/)
+
 ---
 
 ⚠️ **The "No Alpha" Disclaimer**
